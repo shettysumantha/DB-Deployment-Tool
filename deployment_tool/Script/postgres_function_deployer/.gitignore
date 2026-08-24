@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.py[cod]
+.generated/
+generated_scripts/*.sql
+logs/*.log
+.venv/
