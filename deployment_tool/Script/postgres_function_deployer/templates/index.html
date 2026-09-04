@@ -59,6 +59,54 @@
         </div>
       </section>
       <div id="notice" class="notice d-none" role="alert"></div>
+      <section class="comparison-controls toolbar-panel mb-4">
+        <div class="toolbar-title">
+          <div>
+            <span class="eyebrow">DATABASE COMPARISON</span>
+            <h3>Compare selected source and target databases</h3>
+          </div>
+          <button id="compareDashboardBtn" class="btn btn-primary" disabled>
+            Compare
+          </button>
+        </div>
+        <div class="comparison-options">
+          <div
+            class="comparison-type"
+            role="radiogroup"
+            aria-label="Object type"
+          >
+            <label
+              ><input type="radio" name="comparisonType" value="tables" />
+              Tables</label
+            >
+            <label
+              ><input
+                type="radio"
+                name="comparisonType"
+                value="functions"
+                checked
+              />
+              Functions</label
+            >
+            <label
+              ><input type="radio" name="comparisonType" value="both" />
+              Both</label
+            >
+          </div>
+          <label class="comparison-search"
+            >Object name search
+            <input
+              id="comparisonSearch"
+              placeholder="Partial table or function name"
+            />
+          </label>
+        </div>
+        <div
+          id="comparisonSummary"
+          class="comparison-summary"
+          aria-live="polite"
+        ></div>
+      </section>
       <section class="row g-3 mb-4">
         <div class="col-xl-6">
           <article class="connection-panel source-panel">
@@ -257,7 +305,8 @@
                 <button class="active" data-filter="ALL">All</button
                 ><button data-filter="NEW">New</button
                 ><button data-filter="MODIFIED">Modified</button
-                ><button data-filter="IDENTICAL">Identical</button>
+                ><button data-filter="IDENTICAL">Identical</button
+                ><button data-filter="MISSING">Missing</button>
               </div>
               <button id="selectChanged" class="tool-btn">Select changed</button
               ><button id="deselectAll" class="tool-btn">Clear</button>
@@ -333,7 +382,7 @@
                 ><button data-table-filter="NEW">New</button
                 ><button data-table-filter="MODIFIED">Modified</button
                 ><button data-table-filter="IDENTICAL">Identical</button
-                ><button data-table-filter="LIVE ONLY">Live only</button>
+                ><button data-table-filter="MISSING">Missing</button>
               </div>
             </div>
           </div>

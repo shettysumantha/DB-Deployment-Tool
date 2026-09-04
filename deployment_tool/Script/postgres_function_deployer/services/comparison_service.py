@@ -17,15 +17,15 @@ def normalize_definition(definition):
 def compare_functions(td_config, live_config, expected_names):
     from .function_service import fetch_selected
     source = fetch_selected(td_config, expected_names)
-    live = fetch_matching_keys(live_config, set(source))
+    live = fetch_selected(live_config, expected_names)
     results = []
     for key in sorted(set(source) | set(live)):
         source_record = source.get(key)
         live_record = live.get(key)
         if source_record and not live_record:
-            status = "NEW"
+            status = "MISSING"
         elif live_record and not source_record:
-            status = "LIVE ONLY"
+            status = "NEW"
         elif normalize_definition(source_record["definition"]) != normalize_definition(live_record["definition"]):
             status = "MODIFIED"
         else:

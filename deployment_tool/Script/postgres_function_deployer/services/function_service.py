@@ -87,8 +87,7 @@ def _record(row):
 
 
 def fetch_selected(config, expected_names):
-    if not expected_names:
-        return {}
+    expected_names = expected_names or [""]
 
     with connection(config) as conn:
         with conn.cursor() as cursor:

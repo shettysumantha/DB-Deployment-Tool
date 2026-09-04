@@ -122,9 +122,9 @@ def compare_tables(td_config, live_config, names, include_live_only=False, patte
     for key in sorted(set(source) | set(live)):
         source_record, live_record = source.get(key), live.get(key)
         if source_record and not live_record:
-            status, changes = 'NEW', ['Not available in Live']
+            status, changes = 'MISSING', ['Not available in Target']
         elif live_record and not source_record:
-            status, changes = 'LIVE ONLY', ['Not present in selected T&D tables']
+            status, changes = 'NEW', ['Not present in Source tables']
         elif _signature(source_record) != _signature(live_record):
             status, changes = 'MODIFIED', describe_changes(live_record, source_record)
         else:

@@ -178,7 +178,7 @@ def compare():
         td = require_role("td")
         live = require_role("live")
         payload = request.get_json(silent=True) or {}
-        raw_expected = payload.get("expected_functions", "")
+        raw_expected = payload.get("function_search") or payload.get("expected_functions", "")
         names = sorted(set(EXPECTED_FUNCTIONS) | set(parse_expected(raw_expected)))
         state["expected_names"] = names
         state["results"] = compare_functions(td, live, names)
@@ -205,8 +205,10 @@ def compare_table_route():
     try:
         state = vault_for_session()
         payload = request.get_json(silent=True) or {}
-        names = sorted(set(EXPECTED_TABLES) | set(parse_table_names(payload.get("expected_tables", ""))))
         search = str(payload.get("table_search", "")).strip()
+        names = sorted(set(EXPECTED_TABLES) | set(parse_table_names(payload.get("expected_tables", ""))))
+        if search:
+            names = sorted(set(names) | {search})
         state["expected_tables"] = names
         pattern = f"%{search}%" if search else TABLE_NAME_PATTERN
         state["table_results"] = compare_tables(require_role("td"), require_role("live"), names, pattern=pattern)
