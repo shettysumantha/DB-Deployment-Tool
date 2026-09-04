@@ -49,9 +49,7 @@
           </p>
         </div>
         <div class="action-cluster">
-          <button id="compareBtn" class="btn btn-primary" disabled>
-            Compare Functions</button
-          ><button id="generateBtn" class="btn btn-outline-light" disabled>
+          <button id="generateBtn" class="btn btn-outline-light" disabled>
             Generate SQL</button
           ><button id="deployBtn" class="btn btn-warning" disabled>
             Deploy Selected
@@ -59,54 +57,6 @@
         </div>
       </section>
       <div id="notice" class="notice d-none" role="alert"></div>
-      <section class="comparison-controls toolbar-panel mb-4">
-        <div class="toolbar-title">
-          <div>
-            <span class="eyebrow">DATABASE COMPARISON</span>
-            <h3>Compare selected source and target databases</h3>
-          </div>
-          <button id="compareDashboardBtn" class="btn btn-primary" disabled>
-            Compare
-          </button>
-        </div>
-        <div class="comparison-options">
-          <div
-            class="comparison-type"
-            role="radiogroup"
-            aria-label="Object type"
-          >
-            <label
-              ><input type="radio" name="comparisonType" value="tables" />
-              Tables</label
-            >
-            <label
-              ><input
-                type="radio"
-                name="comparisonType"
-                value="functions"
-                checked
-              />
-              Functions</label
-            >
-            <label
-              ><input type="radio" name="comparisonType" value="both" />
-              Both</label
-            >
-          </div>
-          <label class="comparison-search"
-            >Object name search
-            <input
-              id="comparisonSearch"
-              placeholder="Partial table or function name"
-            />
-          </label>
-        </div>
-        <div
-          id="comparisonSummary"
-          class="comparison-summary"
-          aria-live="polite"
-        ></div>
-      </section>
       <section class="row g-3 mb-4">
         <div class="col-xl-6">
           <article class="connection-panel source-panel">
@@ -267,28 +217,55 @@
           </article>
         </div>
       </section>
-      <section id="functions">
-        <section class="toolbar-panel mb-4">
-          <div class="toolbar-title">
-            <div>
-              <span class="eyebrow">SCOPE</span>
-              <h3>Function selection</h3>
-            </div>
-            <span class="scope-note"
-              >Automatic match: <code>%idatum%</code></span
+      <section class="comparison-controls toolbar-panel mb-4">
+        <div class="toolbar-title">
+          <div>
+            <span class="eyebrow">DATABASE COMPARISON</span>
+            <h3>Compare selected source and target databases</h3>
+          </div>
+          <button id="compareDashboardBtn" class="btn btn-primary" disabled>
+            Compare
+          </button>
+        </div>
+        <div class="comparison-options">
+          <div
+            class="comparison-type"
+            role="radiogroup"
+            aria-label="Object type"
+          >
+            <label
+              ><input type="radio" name="comparisonType" value="tables" />
+              Tables</label
+            >
+            <label
+              ><input
+                type="radio"
+                name="comparisonType"
+                value="functions"
+                checked
+              />
+              Functions</label
+            >
+            <label
+              ><input type="radio" name="comparisonType" value="both" />
+              Both</label
             >
           </div>
-          <label class="wide-label"
-            >Additional function names
-            <span>one per line or comma-separated</span
-            ><textarea
-              id="expectedFunctions"
-              rows="2"
-              placeholder="schema_function_name&#10;another_function"
-            ></textarea>
+          <label class="comparison-search"
+            >Object name search
+            <input
+              id="comparisonSearch"
+              placeholder="Partial table or function name"
+            />
           </label>
-        </section>
-        <section id="summary" class="row g-3 mb-4"></section>
+        </div>
+        <div
+          id="comparisonSummary"
+          class="comparison-summary"
+          aria-live="polite"
+        ></div>
+      </section>
+      <section id="functions">
         <section class="results-panel">
           <div class="results-head">
             <div>
@@ -296,11 +273,6 @@
               <h3>Function changes</h3>
             </div>
             <div class="results-tools">
-              <input
-                id="searchInput"
-                class="search-input"
-                placeholder="Search name or signature"
-              />
               <div class="filter-tabs" role="tablist">
                 <button class="active" data-filter="ALL">All</button
                 ><button data-filter="NEW">New</button
@@ -335,34 +307,6 @@
         </section>
       </section>
       <section id="tables" class="mt-5">
-        <section class="toolbar-panel mb-4">
-          <div class="toolbar-title">
-            <div>
-              <span class="eyebrow">SCOPE</span>
-              <h3>Table selection</h3>
-            </div>
-            <span class="scope-note"
-              >All public tables; optional pattern via
-              <code>TABLE_NAME_PATTERN</code></span
-            >
-          </div>
-          <label class="wide-label"
-            >Additional table names
-            <span
-              >one per line or comma-separated; blank compares all matching
-              tables</span
-            ><textarea
-              id="expectedTables"
-              rows="2"
-              placeholder="tbl_example, another_table"
-            ></textarea>
-          </label>
-          <div class="action-cluster mt-3">
-            <button id="compareTablesBtn" class="btn btn-primary" disabled>
-              Compare All Tables
-            </button>
-          </div>
-        </section>
         <section class="results-panel">
           <div class="results-head">
             <div>
@@ -370,13 +314,6 @@
               <h3>Table changes</h3>
             </div>
             <div class="results-tools">
-              <input
-                id="tableSearch"
-                class="search-input"
-                placeholder="Search table name"
-              /><button id="tableSearchBtn" class="tool-btn" disabled>
-                Search &amp; Compare
-              </button>
               <div class="filter-tabs">
                 <button class="active" data-table-filter="ALL">All</button
                 ><button data-table-filter="NEW">New</button
@@ -390,6 +327,7 @@
             <table>
               <thead>
                 <tr>
+                  <th class="check-col"></th>
                   <th>Table</th>
                   <th>Status</th>
                   <th>Changes</th>
@@ -398,7 +336,7 @@
               </thead>
               <tbody id="tableResultsBody">
                 <tr>
-                  <td colspan="4" class="empty-state">
+                  <td colspan="5" class="empty-state">
                     Connect both databases to compare tables.
                   </td>
                 </tr>
@@ -520,5 +458,9 @@
     <script src="https://cdn.jsdelivr.net/npm/diff@5.2.0/dist/diff.min.js"></script>
     <script src="/static/js/app.js"></script>
     <script src="/static/js/tables.js"></script>
+    <div hidden>
+      <button id="compareBtn" type="button"></button>
+      <input id="searchInput" />
+    </div>
   </body>
 </html>
