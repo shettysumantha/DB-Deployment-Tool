@@ -25,7 +25,7 @@ WHERE n.nspname = 'public'
   AND (
         p.proname ILIKE ANY(
             ARRAY(
-                SELECT '%' || word || '%'
+                SELECT '%%' || word || '%%'
                 FROM unnest(%s::text[]) AS word
             )
         )
