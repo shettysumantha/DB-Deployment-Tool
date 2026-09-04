@@ -4,10 +4,10 @@ A local Flask dashboard for comparing selected PostgreSQL functions between a T&
 
 ## Run in VS Code
 
-1. Open a terminal in the application folder:
+1. From the parent folder `C:\DB Deployment Tool`, open a terminal and run:
 
 	```powershell
-	cd "deployment_tool\Script\postgres_function_deployer"
+	cd "Deployment-Tool\deployment_tool\Script\postgres_function_deployer"
 	python -m venv .venv
 	.\.venv\Scripts\Activate.ps1
 	python -m pip install -r requirements.txt
