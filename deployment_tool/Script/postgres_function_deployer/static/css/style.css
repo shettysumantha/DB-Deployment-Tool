@@ -4,6 +4,21 @@
   gap: 24px;
   min-height: 42px;
 }
+.function-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.function-link:hover,
+.function-link:focus-visible {
+  color: var(--cyan);
+  text-decoration: underline;
+}
 .connection-summary strong {
   font-size: 18px;
 }
