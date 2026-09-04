@@ -15,6 +15,7 @@ from services.table_deployment_service import deploy_tables, generate_table_scri
 from services.backup_service import create_backup, safe_backup_path
 from services.registry_service import ensure_registry, insert_backup, search_backups, update_status
 from services.sql_generator import generate_script
+from services.credential_service import connection_config, get_database, list_databases, save_database
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
@@ -66,10 +67,10 @@ def public_result(item):
     }
 
 
-    def public_table_result(item):
-        return {"key": item["key"], "name": item["name"], "schema": item["schema"],
-            "status": item["status"], "changes": item["changes"], "destructive": item["destructive"],
-            "source": item["source"], "live": item["live"]}
+def public_table_result(item):
+    return {"key": item["key"], "name": item["name"], "schema": item["schema"],
+        "status": item["status"], "changes": item["changes"], "destructive": item["destructive"],
+        "source": item["source"], "live": item["live"]}
 
 
 def require_role(role):
@@ -94,10 +95,16 @@ def test_live_connection():
     return _connect("live")
 
 
+def _payload_config(payload):
+    if payload.get("database_id"):
+        return connection_config(get_database(payload["database_id"]), payload.get("password"))
+    return clean_config(payload)
+
+
 def _connect(role):
     payload = request.get_json(silent=True) or {}
     try:
-        config = clean_config(payload)
+        config = _payload_config(payload)
         details = test_connection(config)
         vault_for_session()[role] = config
         if role == "live":
@@ -105,6 +112,46 @@ def _connect(role):
         return jsonify(public_connection(role, True, details))
     except Exception as exc:
         return jsonify(public_connection(role, False, error=safe_error(exc, payload.get("password", "")))), 400
+
+
+@app.get("/databases")
+@app.get("/api/databases")
+def databases():
+    return jsonify({"databases": list_databases()})
+
+
+@app.get("/databases/<int:database_id>")
+@app.get("/api/databases/<int:database_id>")
+def database_detail(database_id):
+    try:
+        return jsonify(get_database(database_id))
+    except Exception as exc:
+        return jsonify({"error": safe_error(exc)}), 404
+
+
+@app.post("/databases/test-connection")
+@app.post("/api/databases/test-connection")
+def test_saved_database():
+    try:
+        payload = request.get_json(silent=True) or {}
+        record = get_database(payload.get("databaseId", payload.get("database_id")))
+        details = test_connection(connection_config(record, payload.get("password")))
+        return jsonify({"success": True, **details})
+    except Exception as exc:
+        return jsonify({"error": safe_error(exc, (request.get_json(silent=True) or {}).get("password", ""))}), 400
+
+
+@app.post("/databases")
+@app.post("/api/databases")
+def add_database():
+    payload = request.get_json(silent=True) or {}
+    try:
+        config = clean_config(payload)
+        test_connection(config)
+        record = save_database(payload.get("database_alias"), config)
+        return jsonify({"database": record}), 201
+    except Exception as exc:
+        return jsonify({"error": safe_error(exc, payload.get("password", ""))}), 400
 
 
 @app.post("/api/compare")

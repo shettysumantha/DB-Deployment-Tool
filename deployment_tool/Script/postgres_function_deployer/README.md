@@ -24,6 +24,8 @@ A local Flask dashboard for comparing selected PostgreSQL functions between a T&
 
 4. Open `http://127.0.0.1:5000`.
 
+Saved database selections are stored locally in `database_credentials.sqlite3`. The file contains only reusable connection details and audit fields. Passwords are required for every connection and are never stored. Set `CREDENTIALS_DB` to use another protected location and `APP_USER` to provide the audit identity used when saving a configuration.
+
 ## Safety model
 
 - Passwords are accepted over the local HTTPS-capable Flask deployment boundary and held only in server process memory for the current signed session identifier. They are never returned to the browser, written to SQL, or logged by the application.
@@ -39,6 +41,6 @@ The source catalog uses `pg_get_function_identity_arguments`, `pg_get_function_a
 
 ## API routes
 
-`POST /api/connect-td`, `POST /api/test-live-connection`, `POST /api/compare`, `GET /api/functions`, `GET /api/function/<key>/diff`, `POST /api/generate-script`, `POST /api/deploy-function`, `POST /api/deploy-selected`, and `GET /api/deployment-history`.
+`GET /databases`, `GET /databases/<id>`, `POST /databases/test-connection`, and `POST /databases` manage reusable connection configurations. The same routes are available under `/api`. Saved connections use `database_id` plus a password with the existing T&D and Live connect routes.
 
 Use a least-privilege T&D account for reads and a separately controlled Live account with only the permissions required to replace the approved functions. Do not commit `.env` or generated SQL files.
