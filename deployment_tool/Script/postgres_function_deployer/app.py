@@ -15,7 +15,7 @@ from services.table_deployment_service import deploy_tables, generate_table_scri
 from services.backup_service import create_backup, safe_backup_path
 from services.registry_service import ensure_registry, insert_backup, search_backups, update_status
 from services.sql_generator import generate_script
-from services.credential_service import connection_config, get_database, list_databases, save_database
+from services.credential_service import connection_config, get_database, list_databases, save_database, update_database
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
@@ -134,8 +134,12 @@ def database_detail(database_id):
 def test_saved_database():
     try:
         payload = request.get_json(silent=True) or {}
-        record = get_database(payload.get("databaseId", payload.get("database_id")))
-        details = test_connection(connection_config(record, payload.get("password")))
+        if payload.get("databaseId", payload.get("database_id")):
+            record = get_database(payload.get("databaseId", payload.get("database_id")))
+            config = connection_config(record, payload.get("password"))
+        else:
+            config = clean_config(payload)
+        details = test_connection(config)
         return jsonify({"success": True, **details})
     except Exception as exc:
         return jsonify({"error": safe_error(exc, (request.get_json(silent=True) or {}).get("password", ""))}), 400
@@ -150,6 +154,19 @@ def add_database():
         test_connection(config)
         record = save_database(payload.get("database_alias"), config)
         return jsonify({"database": record}), 201
+    except Exception as exc:
+        return jsonify({"error": safe_error(exc, payload.get("password", ""))}), 400
+
+
+@app.put("/databases/<int:database_id>")
+@app.put("/api/databases/<int:database_id>")
+def edit_database(database_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        config = clean_config(payload)
+        test_connection(config)
+        record = update_database(database_id, payload.get("database_alias"), config)
+        return jsonify({"database": record})
     except Exception as exc:
         return jsonify({"error": safe_error(exc, payload.get("password", ""))}), 400
 

@@ -112,3 +112,26 @@ def save_database(alias, config):
             "This database configuration already exists. Please select it from the existing database list."
         ) from exc
     return get_database(database_id)
+
+
+def update_database(database_id, alias, config):
+    alias = str(alias or "").strip()
+    if not alias or len(alias) > 100:
+        raise ValueError("Database alias is required and must be 100 characters or fewer.")
+    editor = os.getenv("APP_USER") or getpass.getuser() or "local-user"
+    try:
+        with store() as database:
+            database.execute(
+                "UPDATE tbl_database_credentials SET database_alias = ?, host = ?, port = ?, "
+                "database_name = ?, username = ?, updated_by = ?, updated_date = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND is_active = 1",
+                (alias, config["host"], config["port"], config["database"], config["username"], editor, int(database_id)),
+            )
+            if database.total_changes == 0:
+                raise ValueError("The selected database configuration was not found.")
+            database.commit()
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(
+            "This database configuration already exists. Please select it from the existing database list."
+        ) from exc
+    return get_database(database_id)
