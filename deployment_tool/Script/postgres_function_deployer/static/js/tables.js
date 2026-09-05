@@ -1,65 +1,5 @@
-const tableState = { results: [], filter: "ALL", query: "", pending: [] };
-function tableChanged() {
-  return tableState.results.filter(
-    (item) => item.status === "MISSING" || item.status === "MODIFIED",
-  );
-}
-function updateTableActions() {
-  const ready = state.tdConnected && state.liveConnected;
-  if ($("compareDashboardBtn")) $("compareDashboardBtn").disabled = !ready;
-}
-function renderTables() {
-  const visible = tableState.results.filter(
-    (item) =>
-      (tableState.filter === "ALL" || item.status === tableState.filter) &&
-      item.key.toLowerCase().includes(tableState.query),
-  );
-  $("tableResultsBody").innerHTML = visible.length
-    ? visible
-        .map(
-          (item) =>
-            `<tr><td>${item.status === "MISSING" || item.status === "MODIFIED" ? `<input class="table-row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}>` : ""}</td><td>${escapeHtml(item.key)}</td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td>${escapeHtml(item.changes.join("; "))}</td><td><button data-table-diff="${encodeURIComponent(item.key)}">View Changes</button></td></tr>`,
-        )
-        .join("")
-    : '<tr><td colspan="5" class="empty-state">No tables match this view.</td></tr>';
-  $("tableResultsBody")
-    .querySelectorAll(".table-row-check")
-    .forEach((el) =>
-      el.addEventListener("change", () => {
-        const item = tableState.results.find(
-          (x) => x.key === decodeURIComponent(el.dataset.key),
-        );
-        item.selected = el.checked;
-        updateTableActions();
-      }),
-    );
-  $("tableResultsBody")
-    .querySelectorAll("[data-table-diff]")
-    .forEach((el) =>
-      el.addEventListener("click", () =>
-        openTableDiff(decodeURIComponent(el.dataset.tableDiff)),
-      ),
-    );
-}
-async function compareTables(search = "") {
-  try {
-    const data = await json("/api/tables/compare", {
-      method: "POST",
-      body: JSON.stringify({ table_search: search }),
-    });
-    tableState.results = data.results.map((item) => ({
-      ...item,
-      selected: item.status === "MISSING" || item.status === "MODIFIED",
-    }));
-    renderTables();
-    updateTableActions();
-    showNotice(`Compared ${tableState.results.length} PostgreSQL tables.`);
-  } catch (error) {
-    showNotice(error.message, true);
-  }
-}
 function openTableDiff(key) {
-  const item = tableState.results.find((entry) => entry.key === key);
+  const item = state.results.find((entry) => entry.key === key && entry.objectType === "TABLE");
   if (!item) return;
   $("diffTitle").textContent = `Table: ${item.key}`;
   const changes = item.changes
@@ -87,15 +27,5 @@ async function loadBackups() {
     showNotice(error.message, true);
   }
 }
-document.querySelectorAll("[data-table-filter]").forEach((button) =>
-  button.addEventListener("click", () => {
-    document
-      .querySelectorAll("[data-table-filter]")
-      .forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    tableState.filter = button.dataset.tableFilter;
-    renderTables();
-  }),
-);
 $("backupSearch").addEventListener("input", loadBackups);
 loadBackups();

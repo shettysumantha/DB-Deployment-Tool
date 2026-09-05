@@ -29,7 +29,7 @@
           </div>
         </div>
         <nav class="module-nav">
-          <a href="#functions">Functions</a><a href="#tables">Tables</a
+          <a href="#functions">Comparison Results</a
           ><a href="#history">Deployment History</a
           ><a href="#backups">Backup Repository</a>
         </nav>
@@ -270,7 +270,7 @@
           <div class="results-head">
             <div>
               <span class="eyebrow">COMPARISON REGISTER</span>
-              <h3>Function changes</h3>
+              <h3>Comparison results</h3>
             </div>
             <div class="results-tools">
               <button id="selectAll" class="tool-btn">Select all</button>
@@ -291,12 +291,21 @@
               </div>
             </div>
           </div>
+          <div class="results-search">
+            <label for="resultSearch">Search objects</label>
+            <input
+              id="resultSearch"
+              class="search-input"
+              placeholder="Search object name or signature"
+            />
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th class="check-col"></th>
-                  <th>Function</th>
+                  <th>Object name</th>
+                  <th>Object type</th>
                   <th>Signature</th>
                   <th>Status</th>
                   <th class="text-end">Actions</th>
@@ -304,7 +313,7 @@
               </thead>
               <tbody id="resultsBody">
                 <tr>
-                  <td colspan="5" class="empty-state">
+                  <td colspan="6" class="empty-state">
                     Connect both databases to begin a comparison.
                   </td>
                 </tr>
@@ -330,45 +339,6 @@
         </div>
         <pre id="sqlPreview" class="sql-preview">
 Select objects and click Generate SQL.</pre>
-      </section>
-      <section id="tables" class="mt-5">
-        <section class="results-panel">
-          <div class="results-head">
-            <div>
-              <span class="eyebrow">TABLE COMPARISON REGISTER</span>
-              <h3>Table changes</h3>
-            </div>
-            <div class="results-tools">
-              <div class="filter-tabs">
-                <button class="active" data-table-filter="ALL">All</button
-                ><button data-table-filter="NEW">New</button
-                ><button data-table-filter="MODIFIED">Modified</button
-                ><button data-table-filter="IDENTICAL">Identical</button
-                ><button data-table-filter="MISSING">Missing</button>
-              </div>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th class="check-col"></th>
-                  <th>Table</th>
-                  <th>Status</th>
-                  <th>Changes</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="tableResultsBody">
-                <tr>
-                  <td colspan="5" class="empty-state">
-                    Connect both databases to compare tables.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
       </section>
       <section id="history" class="history-panel mt-4">
         <div class="results-head">

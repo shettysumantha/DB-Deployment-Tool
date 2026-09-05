@@ -33,28 +33,61 @@
   flex-wrap: wrap;
   margin-top: 18px;
 }
-.comparison-summary button {
+.comparison-summary-group {
+  width: 100%;
+}
+.comparison-summary-group > strong {
+  display: block;
+  margin-bottom: 10px;
+}
+.summary-cards {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.summary-card {
+  min-width: 92px;
   background: var(--panel-2);
   border: 1px solid var(--line);
   color: #fff;
-  padding: 10px 14px;
+  padding: 9px 12px;
   border-radius: 3px;
   text-align: left;
 }
-.comparison-summary button:hover,
-.comparison-summary button:focus-visible {
+.summary-card span,
+.summary-card strong {
+  display: block;
+}
+.summary-card span {
+  color: var(--muted);
+  font: 500 10px "DM Mono";
+  letter-spacing: 1px;
+}
+.summary-card strong {
+  font-size: 20px;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+.summary-card:hover,
+.summary-card:focus-visible,
+.summary-card.active {
   border-color: var(--cyan);
   color: var(--cyan);
 }
-.comparison-summary-group {
+.results-search {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  justify-content: flex-end;
+  padding: 0 0 14px;
 }
-.comparison-summary-group strong {
-  font-size: 13px;
-  margin-right: 4px;
+.results-search label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+.results-search .search-input {
+  width: min(420px, 100%);
 }
 .sql-preview {
   margin: 0;
@@ -420,6 +453,20 @@ code {
 .badge-MISSING {
   background: #633d4a;
   color: #ffc1b8;
+}
+.object-type {
+  display: inline-block;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font: 500 10px "DM Mono";
+  letter-spacing: 0.5px;
+}
+.object-type-function {
+  color: var(--cyan);
+}
+.object-type-table {
+  color: var(--yellow);
 }
 .row-actions {
   display: flex;

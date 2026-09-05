@@ -2,6 +2,7 @@ const state = {
   results: [],
   filter: "ALL",
   query: "",
+  comparisonType: "functions",
   pendingKeys: [],
   tdConnected: false,
   liveConnected: false,
@@ -42,24 +43,34 @@ function updateActions() {
 function statusCount(status) {
   return state.results.filter((x) => x.status === status).length;
 }
-function renderSummary() {}
+function renderSummary() {
+  const label = state.comparisonType === "both" ? "Comparison summary" : `${state.comparisonType === "tables" ? "Tables" : "Functions"} (${state.results.length})`;
+  const statuses = ["ALL", "NEW", "MODIFIED", "IDENTICAL", "MISSING"];
+  const buttons = statuses.map((status) => {
+    const count = status === "ALL" ? state.results.length : statusCount(status);
+    return `<button type="button" class="summary-card${state.filter === status ? " active" : ""}" data-summary-status="${status}"><span>${status}</span><strong>${count}</strong></button>`;
+  }).join("");
+  $("comparisonSummary").innerHTML = `<div class="comparison-summary-group"><strong>${label}</strong><div class="summary-cards">${buttons}</div></div>`;
+}
 function renderResults() {
   const body = $("resultsBody");
   const visible = state.results.filter(
     (item) =>
       (state.filter === "ALL" || item.status === state.filter) &&
-      `${item.name} ${item.signature}`.toLowerCase().includes(state.query),
+      `${item.name} ${item.signature || ""} ${item.key}`.toLowerCase().includes(state.query),
   );
   if (!visible.length) {
     body.innerHTML =
-      '<tr><td colspan="5" class="empty-state">No functions match this view.</td></tr>';
+      '<tr><td colspan="6" class="empty-state">No objects match this view.</td></tr>';
     return;
   }
   body.innerHTML = visible
     .map((item) => {
       const deployable =
         item.status === "MISSING" || item.status === "MODIFIED";
-      return `<tr><td>${deployable ? `<input class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}>` : ""}</td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}">${item.name}</button></td><td class="signature">${item.signature}</td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}">View code</button>${deployable ? `<button data-deploy="${encodeURIComponent(item.key)}">Move to Live</button>` : ""}</div></td></tr>`;
+      const objectName = item.objectType === "TABLE" ? item.key : item.name;
+      const actionLabel = item.objectType === "TABLE" ? "View Changes" : "View Code";
+      return `<tr><td>${deployable ? `<input class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}>` : ""}</td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${escapeHtml(objectName)}</button></td><td><span class="object-type object-type-${item.objectType.toLowerCase()}">${item.objectType}</span></td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${actionLabel}</button>${deployable ? `<button data-deploy="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">Move to Live</button>` : ""}</div></td></tr>`;
     })
     .join("");
   body.querySelectorAll(".row-check").forEach((el) =>
@@ -76,7 +87,9 @@ function renderResults() {
     .querySelectorAll("[data-diff]")
     .forEach((el) =>
       el.addEventListener("click", () =>
-        openDiff(decodeURIComponent(el.dataset.diff)),
+        el.dataset.objectType === "TABLE"
+          ? openTableDiff(decodeURIComponent(el.dataset.diff))
+          : openDiff(decodeURIComponent(el.dataset.diff)),
       ),
     );
   body
@@ -252,8 +265,10 @@ async function compare() {
         function_search: $("comparisonSearch").value.trim(),
       }),
     });
+    state.comparisonType = "functions";
     state.results = data.results.map((x) => ({
       ...x,
+      objectType: "FUNCTION",
       selected: x.status === "NEW" || x.status === "MODIFIED",
     }));
     renderSummary();
@@ -263,13 +278,6 @@ async function compare() {
   } catch (error) {
     showNotice(error.message, true);
   }
-}
-function renderComparisonSummary(items, label) {
-  const counts = ["NEW", "MODIFIED", "IDENTICAL", "MISSING"].map((status) => [
-    status,
-    items.filter((item) => item.status === status).length,
-  ]);
-  return `<div class="comparison-summary-group"><strong>${label} (${items.length})</strong><button type="button" data-summary-status="ALL" data-summary-type="${label}">ALL: ${items.length}</button>${counts.map(([status, count]) => `<button type="button" data-summary-status="${status}" data-summary-type="${label}">${status}: ${count}</button>`).join("")}</div>`;
 }
 async function compareDashboard() {
   const source = $("tdForm").querySelector("[name=database_id]").value;
@@ -281,33 +289,38 @@ async function compareDashboard() {
   const type = document.querySelector("[name=comparisonType]:checked").value;
   const search = $("comparisonSearch").value.trim();
   try {
-    let output = "";
+    let combined = [];
     if (type === "functions" || type === "both") {
       const data = await json("/api/compare", {
         method: "POST",
         body: JSON.stringify({ function_search: search }),
       });
-      state.results = data.results.map((x) => ({
+      combined = combined.concat(data.results.map((x) => ({
         ...x,
+        objectType: "FUNCTION",
         selected: x.status === "MISSING" || x.status === "MODIFIED",
-      }));
-      renderSummary();
-      renderResults();
-      output += renderComparisonSummary(data.results, "Functions");
+      })));
     }
     if (type === "tables" || type === "both") {
       const data = await json("/api/tables/compare", {
         method: "POST",
         body: JSON.stringify({ table_search: search }),
       });
-      tableState.results = data.results.map((x) => ({
+      combined = combined.concat(data.results.map((x) => ({
         ...x,
+        objectType: "TABLE",
         selected: x.status === "MISSING" || x.status === "MODIFIED",
-      }));
-      renderTables();
-      output += renderComparisonSummary(data.results, "Tables");
+      })));
     }
-    $("comparisonSummary").innerHTML = output;
+    state.comparisonType = type;
+    state.results = combined;
+    state.filter = "ALL";
+    state.query = search.toLowerCase();
+    $("resultSearch").value = search;
+    document.querySelectorAll("[data-filter]").forEach((button) => button.classList.toggle("active", button.dataset.filter === "ALL"));
+    renderSummary();
+    renderResults();
+    updateActions();
     showNotice(`Comparison complete for ${type}.`);
   } catch (error) {
     showNotice(error.message, true);
@@ -359,10 +372,10 @@ function openConfirm(keys) {
     .map((key) => state.results.find((x) => x.key === key))
     .filter(Boolean);
   $("confirmTitle").textContent =
-    `Deploy ${items.length} function${items.length === 1 ? "" : "s"}?`;
+    `Deploy ${items.length} selected object${items.length === 1 ? "" : "s"}?`;
   $("confirmCopy").textContent = items.some((x) => x.status === "MODIFIED")
-    ? "Modified Live functions will be replaced. New functions will be created. This action runs in one transaction."
-    : "New functions will be created in Live. This action runs in one transaction.";
+    ? "Modified Live objects will be replaced. New objects will be created after confirmation."
+    : "New objects will be created in Live after confirmation.";
   $("confirmList").innerHTML = items
     .map((x) => `${x.status}  ${x.key}`)
     .join("<br>");
@@ -370,13 +383,26 @@ function openConfirm(keys) {
 }
 async function deploy() {
   try {
-    const data = await json("/api/deploy-selected", {
-      method: "POST",
-      body: JSON.stringify({ keys: state.pendingKeys }),
-    });
+    const selected = state.pendingKeys
+      .map((key) => state.results.find((item) => item.key === key))
+      .filter(Boolean);
+    const groups = ["FUNCTION", "TABLE"].map((objectType) => ({
+      objectType,
+      items: selected.filter((item) => item.objectType === objectType),
+    })).filter((group) => group.items.length);
+    const responses = await Promise.all(groups.map((group) => json(
+      group.objectType === "TABLE" ? "/api/tables/deploy-selected" : "/api/deploy-selected",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          keys: group.items.map((item) => item.key),
+          ...(group.objectType === "TABLE" ? { confirm_destructive: true } : {}),
+        }),
+      },
+    )));
     bootstrap.Modal.getInstance($("confirmModal")).hide();
-    showNotice(`Deployment committed for ${data.deployed.length} function(s).`);
-    await compare();
+    showNotice(`Deployment committed for ${selected.length} selected object(s).`);
+    await compareDashboard();
     await loadHistory();
   } catch (error) {
     showNotice(error.message, true);
@@ -384,15 +410,23 @@ async function deploy() {
 }
 async function generate() {
   try {
-    const keys = state.results.filter((x) => x.selected).map((x) => x.key);
-    const data = await json("/api/generate-script", {
-      method: "POST",
-      body: JSON.stringify({ keys }),
-    });
-    showNotice(`${data.count} function(s) written to ${data.filename}.`);
-    state.generatedSql = data.sql;
-    $("sqlPreview").textContent = data.sql;
+    const selected = state.results.filter((item) => item.selected);
+    const groups = ["FUNCTION", "TABLE"].map((objectType) => ({
+      objectType,
+      items: selected.filter((item) => item.objectType === objectType),
+    })).filter((group) => group.items.length);
+    const scripts = await Promise.all(groups.map(async (group) => {
+      const data = await json(
+        group.objectType === "TABLE" ? "/api/tables/generate-script" : "/api/generate-script",
+        { method: "POST", body: JSON.stringify({ keys: group.items.map((item) => item.key), ...(group.objectType === "TABLE" ? { confirm_destructive: true } : {}) }) },
+      );
+      const sql = data.sql || await fetch(data.download).then((response) => response.text());
+      return `${sql}\n`;
+    }));
+    state.generatedSql = scripts.join("\n");
+    $("sqlPreview").textContent = state.generatedSql;
     $("downloadSqlBtn").disabled = false;
+    showNotice(`${selected.length} selected object(s) written to the SQL preview.`);
   } catch (error) {
     showNotice(error.message, true);
   }
@@ -401,7 +435,7 @@ function visibleFunctionItems() {
   return state.results.filter(
     (item) =>
       (state.filter === "ALL" || item.status === state.filter) &&
-      `${item.name} ${item.signature}`.toLowerCase().includes(state.query),
+      `${item.name} ${item.signature || ""} ${item.key}`.toLowerCase().includes(state.query),
   );
 }
 function setSelectedForVisible(value) {
@@ -530,18 +564,14 @@ document.querySelectorAll("[name=comparisonType]").forEach((input) =>
 $("comparisonSummary").addEventListener("click", (event) => {
   const button = event.target.closest("[data-summary-status]");
   if (!button) return;
-  if (button.dataset.summaryType === "Functions") {
-    $("functions").scrollIntoView({ behavior: "smooth" });
-    if (button.dataset.summaryStatus === "ALL") state.filter = "ALL";
-    document
-      .querySelector(`[data-filter="${button.dataset.summaryStatus}"]`)
-      ?.click();
-  } else {
-    $("tables").scrollIntoView({ behavior: "smooth" });
-    document
-      .querySelector(`[data-table-filter="${button.dataset.summaryStatus}"]`)
-      ?.click();
-  }
+  state.filter = button.dataset.summaryStatus;
+  document.querySelectorAll("[data-filter]").forEach((item) => item.classList.toggle("active", item.dataset.filter === state.filter));
+  renderSummary();
+  renderResults();
+});
+$("resultSearch").addEventListener("input", (event) => {
+  state.query = event.target.value.trim().toLowerCase();
+  renderResults();
 });
 $("generateBtnBottom").addEventListener("click", generate);
 $("downloadSqlBtn").addEventListener("click", () => {
