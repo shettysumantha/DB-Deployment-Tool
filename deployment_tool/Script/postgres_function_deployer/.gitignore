@@ -8,3 +8,4 @@ generated_scripts/*.sql
 database_credentials.sqlite3
 logs/*.log
 .venv/
+backups/

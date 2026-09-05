@@ -202,6 +202,42 @@ python -m pip install --no-cache-dir psycopg2-binary==2.9.9
 
 If the error continues, install the Microsoft Visual C++ Redistributable (x64) and retry.
 
+### Google Gmail API notification setup
+
+Use the existing repository virtual environment. Do not delete or recreate it
+just because pip is missing; restore pip with `ensurepip` first.
+
+From the repository root:
+
+```powershell
+cd "C:\Deployment Tool\DB-Deployment-Tool"
+& ".\.venv\Scripts\python.exe" -m ensurepip --upgrade
+& ".\.venv\Scripts\python.exe" -m pip --version
+```
+
+Install the Gmail API packages:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+```
+
+Verify the packages:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -c "import google; print('Google API package OK')"
+& ".\.venv\Scripts\python.exe" -c "from googleapiclient.discovery import build; print('Gmail API OK')"
+```
+
+Run the notification test:
+
+```powershell
+& ".\.venv\Scripts\python.exe" ".\deployment_tool\Script\postgres_function_deployer\test_notification.py"
+```
+
+The first run may require Google OAuth authorization. Keep `credentials.json`
+and the generated `token.json` local; both files are ignored by Git. The OAuth
+client JSON is not an email password and cannot authorize Gmail by itself.
+
 ---
 
 ## 8. Configure environment settings

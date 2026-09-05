@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "./deployment_tool/Script/postgres_function_deployer/services"
+    ]
+}

@@ -4,5 +4,6 @@
 .env
 credentials.json
 token.json
+backups/
+generated_scripts/
 
-.credentials.json/
