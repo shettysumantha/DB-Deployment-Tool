@@ -31,7 +31,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 Copy-Item .env.example .env
-python app.py
+.\.venv\Scripts\python.exe app.py
 ```
 
 Then open:
@@ -42,7 +42,7 @@ http://127.0.0.1:5000
 
 ## Important notes
 
-- Use the project virtual environment instead of the system Python.
+- Use the project virtual environment instead of the system Python; start with `.\.venv\Scripts\python.exe app.py` from the app folder.
 - Keep `.env` local and do not commit it.
 - Do not commit `.venv/` or generated SQL files.
 - If `psycopg2` fails on Windows, install the Microsoft Visual C++ Redistributable and retry the venv install.
@@ -52,6 +52,7 @@ http://127.0.0.1:5000
 ```text
 DB-Deployment-Tool/
 ├── README.md
+
 ├── deployment_tool/
 │   └── Script/
 │       └── postgres_function_deployer/

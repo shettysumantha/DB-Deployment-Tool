@@ -56,7 +56,7 @@ It contains:
 
 ```text
 Flask>=3.0,<4
-psycopg2-binary>=2.9,<3
+psycopg2-binary==2.9.9
 python-dotenv>=1.0,<2
 ```
 
@@ -184,7 +184,7 @@ python -m pip install -r requirements.txt
 You can also install the exact packages directly:
 
 ```powershell
-python -m pip install Flask>=3.0,<4 psycopg2-binary>=2.9,<3 python-dotenv>=1.0,<2
+python -m pip install Flask>=3.0,<4 psycopg2-binary==2.9.9 python-dotenv>=1.0,<2
 ```
 
 ### Verify dependencies are available
@@ -193,7 +193,14 @@ python -m pip install Flask>=3.0,<4 psycopg2-binary>=2.9,<3 python-dotenv>=1.0,<
 python -c "import flask, psycopg2, dotenv; print('dependencies ok')"
 ```
 
-If this fails with a `psycopg2` DLL error, install the Microsoft VC++ runtime and retry.
+If this fails with a `psycopg2` DLL error, confirm that the project venv is being used and reinstall the pinned Windows wheel:
+
+```powershell
+python -m pip uninstall -y psycopg2-binary
+python -m pip install --no-cache-dir psycopg2-binary==2.9.9
+```
+
+If the error continues, install the Microsoft Visual C++ Redistributable (x64) and retry.
 
 ---
 
@@ -329,13 +336,7 @@ And indexes are created for registry usage.
 
 ## 10. Start the backend
 
-From the project directory:
-
-```powershell
-python app.py
-```
-
-Or explicitly:
+From the project directory, start the app with the project interpreter:
 
 ```powershell
 .\.venv\Scripts\python.exe app.py
@@ -430,10 +431,10 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ### B. `psycopg2` import fails with DLL error
 
-Install the Microsoft Visual C++ Redistributable and reinstall the package:
+Use the project venv and reinstall the Python 3.8-compatible binary wheel:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install --force-reinstall psycopg2-binary==2.9.10
+.\.venv\Scripts\python.exe -m pip install --no-cache-dir --force-reinstall psycopg2-binary==2.9.9
 ```
 
 Then verify:
@@ -474,8 +475,9 @@ Fix:
 
 Fix:
 
+- use the project venv explicitly: `..\\.venv\\Scripts\\python.exe app.py`
+- install the Python 3.8-compatible binary wheel: `python -m pip install --no-cache-dir psycopg2-binary==2.9.9`
 - install Microsoft Visual C++ Redistributable (x64)
-- reinstall `psycopg2-binary` in the venv
 - ensure you are using the venv Python, not the system Python
 
 ### Error: `Address already in use`
