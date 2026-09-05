@@ -77,7 +77,7 @@ function renderResults() {
     .map((item) => {
       const deployable = item.status === "NEW" || item.status === "MODIFIED";
       const objectName = item.objectType === "TABLE" ? item.key : item.name;
-      const actionLabel = item.objectType === "TABLE" ? "View Changes" : "View Code";
+      const actionLabel = "View Changes";
       const signature = item.objectType === "FUNCTION" ? `<span class="signature object-signature">${escapeHtml(item.signature)}</span>` : "";
       return `<tr><td><input aria-label="Select ${escapeHtml(objectName)}" class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}></td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${escapeHtml(objectName)}${signature}</button></td><td><span class="object-type object-type-${item.objectType.toLowerCase()}">${item.objectType}</span></td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${actionLabel}</button>${deployable ? `<button data-deploy="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">Move to Live</button>` : ""}</div></td></tr>`;
     })
@@ -385,8 +385,9 @@ function openConfirm(keys) {
   const items = keys
     .map((key) => state.results.find((x) => x.key === key))
     .filter(Boolean);
-  $("confirmTitle").textContent =
-    `Deploy ${items.length} selected object${items.length === 1 ? "" : "s"}?`;
+  $("confirmTitle").textContent = items.length === 1
+    ? "Are you sure you want to deploy this change to LIVE?"
+    : `Are you sure you want to deploy these ${items.length} changes to LIVE?`;
   const counts = ["NEW", "MODIFIED", "MISSING"].map(
     (status) => `${status}: ${items.filter((item) => item.status === status).length}`,
   ).join("  |  ");
