@@ -240,8 +240,11 @@ def table_diff(key):
 
 def selected_tables():
     requested = set((request.get_json(silent=True) or {}).get("keys", []))
-    items = [item for item in vault_for_session().get("table_results", []) if item["key"] in requested]
-    if len(items) != len(requested) or not items: raise ValueError("Select at least one changed table.")
+    comparison = vault_for_session().get("table_results", [])
+    if not comparison:
+        raise ValueError("The comparison expired or is not available. Reconnect both databases and compare again.")
+    items = [item for item in comparison if item["key"] in requested]
+    if len(items) != len(requested) or not items: raise ValueError("Select at least one changed table from the current comparison.")
     if any(item["status"] not in ("NEW", "MODIFIED") or not item["source"] for item in items):
         raise ValueError("Only NEW and MODIFIED tables can be deployed or scripted.")
     return items
@@ -302,7 +305,10 @@ def deploy_table_route():
 
 def selected_items():
     requested = set((request.get_json(silent=True) or {}).get("keys", []))
-    items = [item for item in vault_for_session().get("results", []) if item["key"] in requested]
+    comparison = vault_for_session().get("results", [])
+    if not comparison:
+        raise ValueError("The comparison expired or is not available. Reconnect both databases and compare again.")
+    items = [item for item in comparison if item["key"] in requested]
     invalid = [item["key"] for item in items if item["status"] not in ("NEW", "MODIFIED") or not item["source"]]
     if invalid:
         raise ValueError("Only NEW and MODIFIED functions can be deployed or scripted.")
