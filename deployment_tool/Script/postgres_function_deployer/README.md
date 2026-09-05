@@ -262,6 +262,7 @@ EXPECTED_TABLES=customer,order_header
 TABLE_NAME_PATTERN=%
 CREDENTIALS_DB=C:/secure/path/database_credentials.sqlite3
 APP_USER=developer-name
+BACKUP_ROOT_PATH=D:/DatabaseDeploymentBackups
 NOTIFICATION_EMAIL_TO=SUMANTHASHETTYTECH@GMAIL.COM
 NOTIFICATION_MOBILE_TO=1111111111
 SMTP_HOST=
@@ -274,6 +275,19 @@ MOBILE_NOTIFICATION_WEBHOOK=
 ```
 
 > Never commit `.env` to Git.
+
+`BACKUP_ROOT_PATH` must point to a writable folder outside this project. The
+application stores only backup metadata and the physical file path in
+PostgreSQL; backup SQL files are written under `LIVE/<year>/<month>/<deployment>`
+inside the configured root. For example:
+
+```text
+D:/DatabaseDeploymentBackups/LIVE/2026/09/DEP_20260905_154514_ED54/
+```
+
+Backups are created only for `MODIFIED` objects, using the existing LIVE
+definition before deployment. NEW, MISSING, and IDENTICAL objects do not
+create backup files.
 
 Deployment notifications are optional and server-side. Email is sent only when
 `SMTP_HOST` is configured, and mobile delivery is sent only when

@@ -31,6 +31,12 @@ def insert_backup(config, object_type, record, backup, deployment_id, version, d
     ensure_registry(config)
     with connection(config) as conn:
         with conn.cursor() as cursor:
+            cursor.execute("""SELECT backup_id FROM public.tbl_deployment_backup_registry
+                WHERE deployment_id=%s AND object_type=%s AND schema_name=%s AND object_name=%s
+                ORDER BY backup_id LIMIT 1""", (deployment_id, object_type, record.get('schema', 'public'), record['name']))
+            existing = cursor.fetchone()
+            if existing:
+                return existing[0]
             cursor.execute("""INSERT INTO public.tbl_deployment_backup_registry
                 (object_type,schema_name,object_name,object_signature,backup_file_name,backup_file_path,
                  backup_file_type,backup_created_at,deployment_version,deployment_id,deployment_type,
