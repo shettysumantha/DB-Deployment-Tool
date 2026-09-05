@@ -301,7 +301,9 @@ def deploy_table_route():
         deployment_id = "DEP_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(2).upper()
         version = (payload.get("version") or datetime.now().strftime("%Y%m%d_%H%M%S")).strip()
         result = deploy_tables(require_role("live"), items, deployment_id, version, bool(payload.get("confirm_destructive")))
-        result["notification"] = send_deployment_notification(result)
+        result["notification"] = send_deployment_notification(result) if result.get("success") else {
+            "configured": False, "email": "NOT_SENT", "mobile": "NOT_SENT", "errors": []
+        }
         for item in items:
             vault_for_session()["history"].insert(0, {"timestamp": result["timestamp"], "key": item["key"], "name": item["name"], "status_before": item["status"], "result": "SUCCESS" if result["success"] else "FAILED", "error": result.get("error", ""), "object_type": "TABLE", "deployment_id": deployment_id, "version": version, "backup_ids": result.get("backup_ids", []), "notification": result.get("notification", {})})
         return jsonify(result), 200 if result["success"] else 400
@@ -373,7 +375,9 @@ def _deploy():
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
         result = deploy_records(live, items)
-        result["notification"] = send_deployment_notification(result)
+        result["notification"] = send_deployment_notification(result) if result.get("success") else {
+            "configured": False, "email": "NOT_SENT", "mobile": "NOT_SENT", "errors": []
+        }
         for item in items:
             state["history"].insert(0, {
                 "timestamp": result["timestamp"], "key": item["key"], "name": item["name"],

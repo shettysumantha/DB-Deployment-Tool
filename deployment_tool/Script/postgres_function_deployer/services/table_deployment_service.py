@@ -8,7 +8,22 @@ from .registry_service import insert_backup, update_status
 def migration_sql(item, allow_destructive=False):
     source, live = item['source'], item['live']
     if not live:
-        return source['definition'], False
+        statements = []
+        for sequence in source.get('sequences', []):
+            qualified_sequence = f'"{sequence["schema"]}"."{sequence["name"]}"'
+            cycle = ' CYCLE' if sequence['cycle'] else ''
+            statements.append(
+                f'CREATE SEQUENCE IF NOT EXISTS {qualified_sequence} '
+                f'AS {sequence["data_type"]} START WITH {sequence["start"]} '
+                f'INCREMENT BY {sequence["increment"]} MINVALUE {sequence["min"]} '
+                f'MAXVALUE {sequence["max"]} CACHE {sequence["cache"]}{cycle};'
+            )
+        statements.append(source['definition'])
+        for sequence in source.get('sequences', []):
+            qualified_sequence = f'"{sequence["schema"]}"."{sequence["name"]}"'
+            qualified_table = f'"{source["schema"]}"."{source["name"]}"'
+            statements.append(f'ALTER SEQUENCE {qualified_sequence} OWNED BY {qualified_table}."{sequence["column"]}";')
+        return '\n'.join(statements), False
     statements, destructive = [], []
     old_columns = {x['name']: x for x in live['columns']}
     new_columns = {x['name']: x for x in source['columns']}

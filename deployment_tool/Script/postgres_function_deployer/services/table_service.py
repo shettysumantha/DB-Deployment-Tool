@@ -56,6 +56,37 @@ def _record(cursor, oid, schema, name, is_partition, partition_key, description)
         'name': row[0], 'data_type': row[1], 'nullable': not row[2],
         'default': row[3], 'identity': row[4], 'generated': row[5], 'order': row[6]
     } for row in cursor.fetchall()]
+    sequences = []
+    for column in columns:
+        cursor.execute("SELECT pg_get_serial_sequence(%s, %s)", (f'{schema}.{name}', column['name']))
+        sequence_key = cursor.fetchone()[0]
+        if not sequence_key:
+            continue
+        sequence_schema, sequence_name = sequence_key.split('.', 1)
+        sequence_schema = sequence_schema.strip('"')
+        sequence_name = sequence_name.strip('"')
+        cursor.execute("""
+            SELECT format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement,
+                   s.seqmin, s.seqmax, s.seqcache, s.seqcycle
+            FROM pg_sequence s
+            JOIN pg_class c ON c.oid = s.seqrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = %s AND c.relname = %s
+        """, (sequence_schema, sequence_name))
+        sequence = cursor.fetchone()
+        if sequence:
+            sequences.append({
+                'schema': sequence_schema,
+                'name': sequence_name,
+                'data_type': sequence[0],
+                'start': sequence[1],
+                'increment': sequence[2],
+                'min': sequence[3],
+                'max': sequence[4],
+                'cache': sequence[5],
+                'cycle': sequence[6],
+                'column': column['name'],
+            })
     cursor.execute("""
         SELECT conname, contype, pg_get_constraintdef(oid)
         FROM pg_constraint WHERE conrelid = %s
@@ -70,14 +101,17 @@ def _record(cursor, oid, schema, name, is_partition, partition_key, description)
     """, (oid,))
     indexes = [{'name': row[0].split('.')[-1].strip('"'), 'unique': row[1],
                 'primary': row[2], 'definition': row[3]} for row in cursor.fetchall()]
-    definition = _create_definition(schema, name, columns, constraints, indexes, partition_key)
+    definition = _create_definition(schema, name, columns, constraints, indexes, partition_key, sequences)
     return {'key': table_key(schema, name), 'schema': schema, 'name': name,
-            'columns': columns, 'constraints': constraints, 'indexes': indexes,
-            'is_partition': bool(is_partition), 'partition_key': partition_key,
-            'description': description or '', 'definition': definition}
+        'columns': columns, 'constraints': constraints, 'indexes': indexes,
+        'sequences': sequences,
+        'is_partition': bool(is_partition), 'partition_key': partition_key,
+        'description': description or '', 'definition': definition}
 
 
-def _create_definition(schema, name, columns, constraints, indexes, partition_key):
+def _create_definition(schema, name, columns, constraints, indexes, partition_key, sequences=None):
+    sequences = sequences or []
+    sequence_by_column = {item['column']: item for item in sequences}
     lines = []
     for column in columns:
         line = f'    "{column["name"]}" {column["data_type"]}'
@@ -85,6 +119,10 @@ def _create_definition(schema, name, columns, constraints, indexes, partition_ke
             line += f" GENERATED {'ALWAYS' if column['identity'] == 'a' else 'BY DEFAULT'} AS IDENTITY"
         if column['generated']:
             line += ' GENERATED ALWAYS AS (' + (column['default'] or '') + ') STORED'
+        elif column['default'] and column['name'] in sequence_by_column and 'nextval' in column['default']:
+            sequence = sequence_by_column[column['name']]
+            qualified_sequence = f'"{sequence["schema"]}"."{sequence["name"]}"'
+            line += f" DEFAULT nextval('{qualified_sequence}'::regclass)"
         elif column['default']:
             line += f" DEFAULT {column['default']}"
         if not column['nullable']:
@@ -111,6 +149,7 @@ def _signature(record):
         'columns': [{key: value for key, value in column.items() if key != 'order'} for column in record['columns']],
         'constraints': [(item['name'], item['type'], item['definition']) for item in record['constraints']],
         'indexes': [(item['name'], item['definition']) for item in record['indexes']],
+        'sequences': [(item['schema'], item['name'], item['data_type'], item['start'], item['increment'], item['min'], item['max'], item['cache'], item['cycle'], item['column']) for item in record.get('sequences', [])],
         'partition_key': record['partition_key'], 'is_partition': record['is_partition']
     }
 
