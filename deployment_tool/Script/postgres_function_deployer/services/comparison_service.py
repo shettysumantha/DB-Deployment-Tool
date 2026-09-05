@@ -23,9 +23,9 @@ def compare_functions(td_config, live_config, expected_names):
         source_record = source.get(key)
         live_record = live.get(key)
         if source_record and not live_record:
-            status = "MISSING"
-        elif live_record and not source_record:
             status = "NEW"
+        elif live_record and not source_record:
+            status = "MISSING"
         elif normalize_definition(source_record["definition"]) != normalize_definition(live_record["definition"]):
             status = "MODIFIED"
         else:

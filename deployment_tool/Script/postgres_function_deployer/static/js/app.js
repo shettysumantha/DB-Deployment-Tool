@@ -29,15 +29,14 @@ function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 function updateActions() {
-  const changed = state.results.filter(
-    (x) => x.status === "MISSING" || x.status === "MODIFIED",
-  );
   const selected = state.results.filter((x) => x.selected);
+  const deployableSelected = selected.filter((x) => ["NEW", "MODIFIED"].includes(x.status));
   const ready = state.tdConnected && state.liveConnected;
   $("compareDashboardBtn").disabled = !ready;
-  $("generateBtn").disabled = !selected.length;
-  $("generateBtnBottom").disabled = !selected.length;
-  $("deployBtn").disabled = !selected.length;
+  $("generateBtn").disabled = !selected.length || deployableSelected.length !== selected.length;
+  $("generateBtnBottom").disabled = !selected.length || deployableSelected.length !== selected.length;
+  $("deployBtn").disabled = !selected.length || deployableSelected.length !== selected.length;
+  $("deployBtnBottom").disabled = !selected.length || deployableSelected.length !== selected.length;
   if (typeof updateTableActions === "function") updateTableActions();
 }
 function statusCount(status) {
@@ -61,16 +60,16 @@ function renderResults() {
   );
   if (!visible.length) {
     body.innerHTML =
-      '<tr><td colspan="6" class="empty-state">No objects match this view.</td></tr>';
+      '<tr><td colspan="5" class="empty-state">No objects match this view.</td></tr>';
     return;
   }
   body.innerHTML = visible
     .map((item) => {
-      const deployable =
-        item.status === "MISSING" || item.status === "MODIFIED";
+      const deployable = item.status === "NEW" || item.status === "MODIFIED";
       const objectName = item.objectType === "TABLE" ? item.key : item.name;
       const actionLabel = item.objectType === "TABLE" ? "View Changes" : "View Code";
-      return `<tr><td>${deployable ? `<input class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}>` : ""}</td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${escapeHtml(objectName)}</button></td><td><span class="object-type object-type-${item.objectType.toLowerCase()}">${item.objectType}</span></td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${actionLabel}</button>${deployable ? `<button data-deploy="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">Move to Live</button>` : ""}</div></td></tr>`;
+      const signature = item.objectType === "FUNCTION" ? `<span class="signature object-signature">${escapeHtml(item.signature)}</span>` : "";
+      return `<tr><td><input aria-label="Select ${escapeHtml(objectName)}" class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}></td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${escapeHtml(objectName)}${signature}</button></td><td><span class="object-type object-type-${item.objectType.toLowerCase()}">${item.objectType}</span></td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${actionLabel}</button>${deployable ? `<button data-deploy="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">Move to Live</button>` : ""}</div></td></tr>`;
     })
     .join("");
   body.querySelectorAll(".row-check").forEach((el) =>
@@ -298,7 +297,7 @@ async function compareDashboard() {
       combined = combined.concat(data.results.map((x) => ({
         ...x,
         objectType: "FUNCTION",
-        selected: x.status === "MISSING" || x.status === "MODIFIED",
+        selected: x.status === "NEW" || x.status === "MODIFIED",
       })));
     }
     if (type === "tables" || type === "both") {
@@ -309,7 +308,7 @@ async function compareDashboard() {
       combined = combined.concat(data.results.map((x) => ({
         ...x,
         objectType: "TABLE",
-        selected: x.status === "MISSING" || x.status === "MODIFIED",
+        selected: x.status === "NEW" || x.status === "MODIFIED",
       })));
     }
     state.comparisonType = type;
@@ -411,6 +410,14 @@ async function deploy() {
 async function generate() {
   try {
     const selected = state.results.filter((item) => item.selected);
+    if (!selected.length) {
+      showNotice("Please select at least one object.", true);
+      return;
+    }
+    if (selected.some((item) => !["NEW", "MODIFIED"].includes(item.status))) {
+      showNotice("Only NEW or MODIFIED objects can be generated or deployed.", true);
+      return;
+    }
     const groups = ["FUNCTION", "TABLE"].map((objectType) => ({
       objectType,
       items: selected.filter((item) => item.objectType === objectType),
@@ -440,18 +447,16 @@ function visibleFunctionItems() {
 }
 function setSelectedForVisible(value) {
   visibleFunctionItems().forEach((item) => {
-    if (item.status === "MISSING" || item.status === "MODIFIED")
-      item.selected = value;
+    item.selected = value;
   });
   renderResults();
   updateActions();
 }
 function selectStatus(status) {
+  state.results.forEach((item) => { item.selected = false; });
   state.results
     .filter((item) => item.status === status)
-    .forEach((item) => {
-      item.selected = true;
-    });
+    .forEach((item) => { item.selected = true; });
   renderResults();
   updateActions();
 }
@@ -574,12 +579,24 @@ $("resultSearch").addEventListener("input", (event) => {
   renderResults();
 });
 $("generateBtnBottom").addEventListener("click", generate);
+$("deployBtnBottom").addEventListener("click", () => {
+  const selected = state.results.filter((item) => item.selected);
+  if (!selected.length) {
+    showNotice("Please select at least one object.", true);
+    return;
+  }
+  if (selected.some((item) => !["NEW", "MODIFIED"].includes(item.status))) {
+    showNotice("Only NEW or MODIFIED objects can be deployed.", true);
+    return;
+  }
+  openConfirm(selected.map((item) => item.key));
+});
 $("downloadSqlBtn").addEventListener("click", () => {
   if (!state.generatedSql) return;
   const blob = new Blob([state.generatedSql], { type: "text/sql" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `database_comparison_${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}.sql`;
+  link.download = `database_deployment_${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}.sql`;
   link.click();
   URL.revokeObjectURL(link.href);
 });

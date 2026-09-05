@@ -119,6 +119,10 @@
   color: var(--cyan);
   text-decoration: underline;
 }
+.object-signature {
+  display: block;
+  margin-top: 4px;
+}
 .connection-summary strong {
   font-size: 18px;
 }
@@ -352,6 +356,21 @@ textarea:focus {
   color: #687277;
   font-size: 12px;
 }
+.comparison-summary .summary-card {
+  min-width: 92px;
+  min-height: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  color: #fff;
+  padding: 9px 12px;
+}
+.comparison-summary .summary-card:hover,
+.comparison-summary .summary-card:focus-visible,
+.comparison-summary .summary-card.active {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
 .results-panel,
 .history-panel {
   padding: 23px 25px;
@@ -415,6 +434,15 @@ td {
 }
 .check-col {
   width: 38px;
+}
+.row-check {
+  appearance: auto;
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--cyan);
+  cursor: pointer;
 }
 tbody tr:hover {
   background: #243740;
