@@ -242,6 +242,13 @@ EXPECTED_FUNCTIONS=
 | `TABLE_NAME_PATTERN` | Optional | Table filter pattern, default `%` |
 | `CREDENTIALS_DB` | Optional | Alternate path for SQLite saved DB metadata |
 | `APP_USER` | Optional | Audit identity for saved database records |
+| `NOTIFICATION_EMAIL_TO` | Optional | Deployment email recipient |
+| `NOTIFICATION_MOBILE_TO` | Optional | Deployment mobile recipient |
+| `SMTP_HOST` | Optional | SMTP server; leave blank to disable email |
+| `SMTP_PORT` | Optional | SMTP port, default `587` |
+| `SMTP_USERNAME` | Optional | SMTP username |
+| `SMTP_PASSWORD` | Optional | SMTP password; keep local and uncommitted |
+| `MOBILE_NOTIFICATION_WEBHOOK` | Optional | Server-side webhook for mobile notifications |
 
 ### Example `.env`
 
@@ -255,9 +262,23 @@ EXPECTED_TABLES=customer,order_header
 TABLE_NAME_PATTERN=%
 CREDENTIALS_DB=C:/secure/path/database_credentials.sqlite3
 APP_USER=developer-name
+NOTIFICATION_EMAIL_TO=SUMANTHASHETTYTECH@GMAIL.COM
+NOTIFICATION_MOBILE_TO=1111111111
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USE_TLS=true
+SMTP_FROM=database-deployer@localhost
+SMTP_USERNAME=
+SMTP_PASSWORD=
+MOBILE_NOTIFICATION_WEBHOOK=
 ```
 
 > Never commit `.env` to Git.
+
+Deployment notifications are optional and server-side. Email is sent only when
+`SMTP_HOST` is configured, and mobile delivery is sent only when
+`MOBILE_NOTIFICATION_WEBHOOK` is configured. Notification errors are reported
+after deployment and do not roll back a successful database deployment.
 
 ---
 

@@ -681,6 +681,21 @@ code {
   font-family: "DM Mono";
   font-size: 12px;
 }
+.change-row.added {
+  color: var(--green);
+  background: #205047;
+}
+.change-row.removed {
+  color: #ffc2bc;
+  background: #572e32;
+}
+.change-row.modified {
+  color: var(--yellow);
+  background: #5a461d;
+}
+.confirm-modal #confirmCopy {
+  white-space: pre-line;
+}
 .diff-column pre {
   white-space: pre-wrap;
   max-height: 50vh;

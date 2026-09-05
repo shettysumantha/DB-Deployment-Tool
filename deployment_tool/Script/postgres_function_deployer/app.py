@@ -16,6 +16,7 @@ from services.backup_service import create_backup, safe_backup_path
 from services.registry_service import ensure_registry, insert_backup, search_backups, update_status
 from services.sql_generator import generate_script
 from services.credential_service import connection_config, get_database, list_databases, save_database, update_database
+from services.notification_service import send_deployment_notification
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
@@ -270,8 +271,9 @@ def deploy_table_route():
         deployment_id = "DEP_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(2).upper()
         version = (payload.get("version") or datetime.now().strftime("%Y%m%d_%H%M%S")).strip()
         result = deploy_tables(require_role("live"), items, deployment_id, version, bool(payload.get("confirm_destructive")))
+        result["notification"] = send_deployment_notification(result)
         for item in items:
-            vault_for_session()["history"].insert(0, {"timestamp": result["timestamp"], "key": item["key"], "name": item["name"], "status_before": item["status"], "result": "SUCCESS" if result["success"] else "FAILED", "error": result.get("error", ""), "object_type": "TABLE", "deployment_id": deployment_id, "version": version})
+            vault_for_session()["history"].insert(0, {"timestamp": result["timestamp"], "key": item["key"], "name": item["name"], "status_before": item["status"], "result": "SUCCESS" if result["success"] else "FAILED", "error": result.get("error", ""), "object_type": "TABLE", "deployment_id": deployment_id, "version": version, "backup_ids": result.get("backup_ids", []), "notification": result.get("notification", {})})
         return jsonify(result), 200 if result["success"] else 400
     except Exception as exc: return jsonify({"error": safe_error(exc)}), 400
 
@@ -321,12 +323,14 @@ def _deploy():
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
         result = deploy_records(live, items)
+        result["notification"] = send_deployment_notification(result)
         for item in items:
             state["history"].insert(0, {
                 "timestamp": result["timestamp"], "key": item["key"], "name": item["name"],
                 "status_before": item["status"], "result": "SUCCESS" if result["success"] else "FAILED",
                 "error": result.get("error", ""), "object_type": "FUNCTION",
                 "deployment_id": result.get("deployment_id", ""), "version": result.get("version", ""),
+                "backup_ids": result.get("backup_ids", []), "notification": result.get("notification", {}),
             })
         if result["success"]:
             state["results"] = compare_functions(

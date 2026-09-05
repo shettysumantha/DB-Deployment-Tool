@@ -19,8 +19,11 @@ def deploy_records(config, records):
                 with conn.cursor() as cursor:
                     for item in ordered:
                         try:
-                            backup = create_backup("FUNCTION", item["live"], deployment_id, version, item["status"]) if item.get("live") else {"file_name": None, "file_path": None, "size": None, "checksum": None}
-                            backup_ids.append(insert_backup(config, "FUNCTION", item.get("live") or item["source"], backup, deployment_id, version, "FUNCTION_DEPLOYMENT"))
+                            source_backup = create_backup("FUNCTION", item["source"], deployment_id, version, item["status"])
+                            backup_ids.append(insert_backup(config, "FUNCTION", item["source"], source_backup, deployment_id, version, "FUNCTION_DEPLOYMENT", notes="T&D source snapshot"))
+                            if item.get("live"):
+                                backup = create_backup("FUNCTION", item["live"], deployment_id, version, item["status"])
+                                backup_ids.append(insert_backup(config, "FUNCTION", item["live"], backup, deployment_id, version, "FUNCTION_DEPLOYMENT", notes="LIVE pre-deployment snapshot"))
                             cursor.execute(generate_function_sql(item["source"]))
                         except Exception as exc:
                             conn.rollback()

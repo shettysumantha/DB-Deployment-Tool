@@ -39,6 +39,16 @@ function updateActions() {
   $("deployBtnBottom").disabled = !selected.length || deployableSelected.length !== selected.length;
   if (typeof updateTableActions === "function") updateTableActions();
 }
+function clearGeneratedSql() {
+  state.generatedSql = "";
+  $("sqlPreview").textContent = "Select objects and click Generate SQL.";
+  $("downloadSqlBtn").disabled = true;
+}
+function setDiffStatus(status) {
+  const badge = $("diffStatus");
+  badge.textContent = status;
+  badge.className = `badge-status badge-${status.replace(" ", "-")}`;
+}
 function statusCount(status) {
   return state.results.filter((x) => x.status === status).length;
 }
@@ -265,6 +275,7 @@ async function compare() {
       }),
     });
     state.comparisonType = "functions";
+    clearGeneratedSql();
     state.results = data.results.map((x) => ({
       ...x,
       objectType: "FUNCTION",
@@ -316,6 +327,7 @@ async function compareDashboard() {
     state.filter = "ALL";
     state.query = search.toLowerCase();
     $("resultSearch").value = search;
+    clearGeneratedSql();
     document.querySelectorAll("[data-filter]").forEach((button) => button.classList.toggle("active", button.dataset.filter === "ALL"));
     renderSummary();
     renderResults();
@@ -328,7 +340,10 @@ async function compareDashboard() {
 function openDiff(key) {
   const item = state.results.find((x) => x.key === key);
   if (!item) return;
-  $("diffTitle").textContent = item.signature;
+  $("diffTitle").textContent = `${item.name} (${item.objectType || "FUNCTION"})`;
+  setDiffStatus(item.status);
+  $("deployFromDiff").classList.toggle("d-none", !["NEW", "MODIFIED"].includes(item.status));
+  $("deployFromDiff").dataset.key = encodeURIComponent(key);
   const left = item.live?.definition || "Function does not exist in Live";
   const right =
     item.source?.definition ||
@@ -372,9 +387,10 @@ function openConfirm(keys) {
     .filter(Boolean);
   $("confirmTitle").textContent =
     `Deploy ${items.length} selected object${items.length === 1 ? "" : "s"}?`;
-  $("confirmCopy").textContent = items.some((x) => x.status === "MODIFIED")
-    ? "Modified Live objects will be replaced. New objects will be created after confirmation."
-    : "New objects will be created in Live after confirmation.";
+  const counts = ["NEW", "MODIFIED", "MISSING"].map(
+    (status) => `${status}: ${items.filter((item) => item.status === status).length}`,
+  ).join("  |  ");
+  $("confirmCopy").textContent = `Source: T&D  |  Target: LIVE\nSelected objects: ${items.length}\n${counts}`;
   $("confirmList").innerHTML = items
     .map((x) => `${x.status}  ${x.key}`)
     .join("<br>");
@@ -389,18 +405,24 @@ async function deploy() {
       objectType,
       items: selected.filter((item) => item.objectType === objectType),
     })).filter((group) => group.items.length);
-    const responses = await Promise.all(groups.map((group) => json(
-      group.objectType === "TABLE" ? "/api/tables/deploy-selected" : "/api/deploy-selected",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          keys: group.items.map((item) => item.key),
-          ...(group.objectType === "TABLE" ? { confirm_destructive: true } : {}),
-        }),
-      },
-    )));
+    const responses = [];
+    for (const group of groups) {
+      responses.push(await json(
+        group.objectType === "TABLE" ? "/api/tables/deploy-selected" : "/api/deploy-selected",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            keys: group.items.map((item) => item.key),
+            ...(group.objectType === "TABLE" ? { confirm_destructive: true } : {}),
+          }),
+        },
+      ));
+    }
     bootstrap.Modal.getInstance($("confirmModal")).hide();
-    showNotice(`Deployment committed for ${selected.length} selected object(s).`);
+    const notificationErrors = responses.flatMap((response) => response.notification?.errors || []);
+    showNotice(notificationErrors.length
+      ? `Deployment completed, but notification failed: ${notificationErrors.join("; ")}`
+      : `Deployment committed for ${selected.length} selected object(s).`);
     await compareDashboard();
     await loadHistory();
   } catch (error) {
@@ -547,11 +569,10 @@ document.querySelectorAll("[data-filter]").forEach((btn) =>
       .forEach((x) => x.classList.remove("active"));
     btn.classList.add("active");
     state.filter = btn.dataset.filter;
+    renderSummary();
     renderResults();
   }),
 );
-loadHistory();
-loadDatabases();
 document
   .querySelectorAll(".save-connect")
   .forEach((button) => (button.type = "button"));
@@ -577,6 +598,12 @@ $("comparisonSummary").addEventListener("click", (event) => {
 $("resultSearch").addEventListener("input", (event) => {
   state.query = event.target.value.trim().toLowerCase();
   renderResults();
+});
+$("deployFromDiff").addEventListener("click", () => {
+  const key = decodeURIComponent($("deployFromDiff").dataset.key || "");
+  if (!key) return;
+  bootstrap.Modal.getInstance($("diffModal"))?.hide();
+  openConfirm([key]);
 });
 $("generateBtnBottom").addEventListener("click", generate);
 $("deployBtnBottom").addEventListener("click", () => {

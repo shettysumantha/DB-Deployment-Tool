@@ -77,9 +77,11 @@ def deploy_tables(config, items, deployment_id, version, allow_destructive=False
                 sql, destructive = migration_sql(item, allow_destructive)
                 if destructive and not allow_destructive:
                     return {'success': False, 'timestamp': started, 'error': 'Destructive table changes require explicit confirmation.'}
-                backup = create_backup('TABLE', item['live'], deployment_id, version, item['status']) if item['live'] else {'file_name': None, 'file_path': None, 'size': None, 'checksum': None}
-                backup_id = insert_backup(config, 'TABLE', item['live'] or item['source'], backup, deployment_id, version, 'TABLE_DEPLOYMENT')
-                backups.append(backup_id)
+                source_backup = create_backup('TABLE', item['source'], deployment_id, version, item['status'])
+                backups.append(insert_backup(config, 'TABLE', item['source'], source_backup, deployment_id, version, 'TABLE_DEPLOYMENT', notes='T&D source snapshot'))
+                if item['live']:
+                    backup = create_backup('TABLE', item['live'], deployment_id, version, item['status'])
+                    backups.append(insert_backup(config, 'TABLE', item['live'], backup, deployment_id, version, 'TABLE_DEPLOYMENT', notes='LIVE pre-deployment snapshot'))
                 with conn.cursor() as cursor: cursor.execute(sql)
             conn.commit()
         update_status(config, deployment_id, 'SUCCESS')

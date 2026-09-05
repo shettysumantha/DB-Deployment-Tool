@@ -1,9 +1,16 @@
 function openTableDiff(key) {
   const item = state.results.find((entry) => entry.key === key && entry.objectType === "TABLE");
   if (!item) return;
-  $("diffTitle").textContent = `Table: ${item.key}`;
+  $("diffTitle").textContent = `${item.key} (TABLE)`;
+  setDiffStatus(item.status);
+  $("deployFromDiff").classList.toggle("d-none", !["NEW", "MODIFIED"].includes(item.status));
+  $("deployFromDiff").dataset.key = encodeURIComponent(key);
   const changes = item.changes
-    .map((change) => `<div class="change-row">${escapeHtml(change)}</div>`)
+    .map((change) => {
+      const marker = change.trim().charAt(0);
+      const kind = marker === "+" ? "added" : marker === "-" ? "removed" : marker === "~" ? "modified" : "";
+      return `<div class="change-row ${kind}">${escapeHtml(change)}</div>`;
+    })
     .join("");
   $("diffView").innerHTML =
     `<div class="schema-summary"><strong>Changes Found: ${item.changes.length}</strong>${changes}</div><div class="diff-column"><h4>LIVE / CURRENT</h4><pre>${escapeHtml(item.live?.definition || "Table does not exist in Live")}</pre></div><div class="diff-column"><h4>T&amp;D / PROPOSED</h4><pre>${escapeHtml(item.source?.definition || "Table is not present in selected T&D scope")}</pre></div>`;
