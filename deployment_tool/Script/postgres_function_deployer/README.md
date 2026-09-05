@@ -248,6 +248,8 @@ EXPECTED_FUNCTIONS=
 | `SMTP_PORT` | Optional | SMTP port, default `587` |
 | `SMTP_USERNAME` | Optional | SMTP username |
 | `SMTP_PASSWORD` | Optional | SMTP password; keep local and uncommitted |
+| `GOOGLE_CREDENTIALS_FILE` | Optional | Local Google OAuth client JSON path; never commit it |
+| `GOOGLE_TOKEN_FILE` | Optional | Local OAuth token path created after consent; never commit it |
 | `MOBILE_NOTIFICATION_WEBHOOK` | Optional | Server-side webhook for mobile notifications |
 
 ### Example `.env`
@@ -279,6 +281,22 @@ Deployment notifications are optional and server-side. Email is sent only when
 `SMTP_HOST` is configured, and mobile delivery is sent only when
 `MOBILE_NOTIFICATION_WEBHOOK` is configured. Notification errors are reported
 after deployment and do not roll back a successful database deployment.
+
+### Google email credentials
+
+`credentials.json` is an OAuth client configuration, not an email password. It
+does not identify an email account or authorize sending by itself. Gmail email
+delivery also requires a one-time OAuth consent flow that creates a local token
+file. Keep both files outside Git:
+
+```text
+GOOGLE_CREDENTIALS_FILE=C:/Deployment Tool/DB-Deployment-Tool/credentials.json
+GOOGLE_TOKEN_FILE=C:/Deployment Tool/DB-Deployment-Tool/token.json
+```
+
+Do not place Gmail passwords, app passwords, OAuth tokens, or client secrets in
+source code or commit them. A Google OAuth client JSON alone cannot replace the
+required account authorization token.
 
 ---
 
