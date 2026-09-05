@@ -21,7 +21,8 @@ def create_backup(object_type, record, deployment_id, version, previous_status):
     definition = record.get('definition', '')
     if not definition:
         return {'file_name': None, 'file_path': None, 'size': None, 'checksum': None}
-    path.write_text(f'-- PRE-DEPLOYMENT BACKUP\n-- Deployment: {deployment_id}\n-- Version: {version}\n\n{definition}\n', encoding='utf-8', newline='')
+    with path.open('w', encoding='utf-8', newline='') as output:
+        output.write(f'-- PRE-DEPLOYMENT BACKUP\n-- Deployment: {deployment_id}\n-- Version: {version}\n\n{definition}\n')
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {'file_name': filename, 'file_path': str(path), 'size': path.stat().st_size, 'checksum': digest,
             'created_at': now.isoformat(), 'previous_status': previous_status}
