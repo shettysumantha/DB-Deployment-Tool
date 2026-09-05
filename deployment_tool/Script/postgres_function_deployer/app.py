@@ -250,6 +250,33 @@ def selected_tables():
     return items
 
 
+def stale_table_keys(items, current):
+    stale = []
+    for item in items:
+        current_item = current.get(item["key"])
+        if not current_item:
+            current_item = next(
+                (
+                    record
+                    for record in current.values()
+                    if record.get("schema") == item.get("schema")
+                    and record.get("name") == item.get("name")
+                ),
+                None,
+            )
+        if item["status"] == "NEW":
+            changed = current_item is not None
+        else:
+            changed = (
+                not item["live"]
+                or not current_item
+                or table_signature(item["live"]) != table_signature(current_item)
+            )
+        if changed:
+            stale.append(item["key"])
+    return stale
+
+
 @app.post("/api/tables/generate-script")
 def generate_tables():
     try:
@@ -266,29 +293,7 @@ def deploy_table_route():
         payload = request.get_json(silent=True) or {}
         items = selected_tables()
         current = fetch_tables(require_role("live"), [item["name"] for item in items], pattern=TABLE_NAME_PATTERN)
-        stale = []
-        for item in items:
-            current_item = current.get(item["key"])
-            if not current_item:
-                current_item = next(
-                    (
-                        record
-                        for record in current.values()
-                        if record.get("schema") == item.get("schema")
-                        and record.get("name") == item.get("name")
-                    ),
-                    None,
-                )
-            if item["status"] == "NEW":
-                changed = current_item is not None
-            else:
-                changed = (
-                    not item["live"]
-                    or not current_item
-                    or table_signature(item["live"]) != table_signature(current_item)
-                )
-            if changed:
-                stale.append(item["key"])
+        stale = stale_table_keys(items, current)
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
         if any(item["destructive"] for item in items) and not payload.get("confirm_destructive"):
@@ -319,6 +324,23 @@ def selected_items():
     return items
 
 
+def stale_function_keys(items, current):
+    stale = []
+    for item in items:
+        current_item = current.get(item["key"])
+        if item["status"] == "NEW":
+            changed = current_item is not None
+        else:
+            changed = (
+                not item["live"]
+                or not current_item
+                or item["live"]["definition"] != current_item["definition"]
+            )
+        if changed:
+            stale.append(item["key"])
+    return stale
+
+
 @app.post("/api/generate-script")
 def generate():
     try:
@@ -347,19 +369,7 @@ def _deploy():
         items = selected_items()
         from services.function_service import fetch_matching_keys
         current = fetch_matching_keys(live, {item["key"] for item in items})
-        stale = []
-        for item in items:
-            current_item = current.get(item["key"])
-            if item["status"] == "NEW":
-                changed = current_item is not None
-            else:
-                changed = (
-                    not item["live"]
-                    or not current_item
-                    or item["live"]["definition"] != current_item["definition"]
-                )
-            if changed:
-                stale.append(item["key"])
+        stale = stale_function_keys(items, current)
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
         result = deploy_records(live, items)
