@@ -262,8 +262,22 @@ def deploy_table_route():
     try:
         payload = request.get_json(silent=True) or {}
         items = selected_tables()
-        current = fetch_tables(require_role("live"), [item["name"] for item in items], pattern="")
-        stale = [item["key"] for item in items if item["key"] not in current or not item["live"] or table_signature(item["live"]) != table_signature(current[item["key"]])]
+        current = fetch_tables(require_role("live"), [item["name"] for item in items], pattern=TABLE_NAME_PATTERN)
+        stale = []
+        for item in items:
+            current_item = current.get(item["key"])
+            if not current_item:
+                current_item = next(
+                    (
+                        record
+                        for record in current.values()
+                        if record.get("schema") == item.get("schema")
+                        and record.get("name") == item.get("name")
+                    ),
+                    None,
+                )
+            if not item["live"] or not current_item or table_signature(item["live"]) != table_signature(current_item):
+                stale.append(item["key"])
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
         if any(item["destructive"] for item in items) and not payload.get("confirm_destructive"):
