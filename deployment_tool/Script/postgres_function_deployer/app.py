@@ -276,7 +276,15 @@ def deploy_table_route():
                     ),
                     None,
                 )
-            if not item["live"] or not current_item or table_signature(item["live"]) != table_signature(current_item):
+            if item["status"] == "NEW":
+                changed = current_item is not None
+            else:
+                changed = (
+                    not item["live"]
+                    or not current_item
+                    or table_signature(item["live"]) != table_signature(current_item)
+                )
+            if changed:
                 stale.append(item["key"])
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
@@ -333,7 +341,19 @@ def _deploy():
         items = selected_items()
         from services.function_service import fetch_matching_keys
         current = fetch_matching_keys(live, {item["key"] for item in items})
-        stale = [item["key"] for item in items if item["key"] not in current or not item["live"] or item["live"]["definition"] != current[item["key"]]["definition"]]
+        stale = []
+        for item in items:
+            current_item = current.get(item["key"])
+            if item["status"] == "NEW":
+                changed = current_item is not None
+            else:
+                changed = (
+                    not item["live"]
+                    or not current_item
+                    or item["live"]["definition"] != current_item["definition"]
+                )
+            if changed:
+                stale.append(item["key"])
         if stale:
             raise ValueError("Live changed after comparison. Refresh the comparison before deploying: " + ", ".join(stale))
         result = deploy_records(live, items)
