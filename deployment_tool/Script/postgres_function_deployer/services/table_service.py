@@ -94,10 +94,17 @@ def _record(cursor, oid, schema, name, is_partition, partition_key, description)
     """, (oid,))
     constraints = [{'name': row[0], 'type': row[1], 'definition': row[2]} for row in cursor.fetchall()]
     cursor.execute("""
-        SELECT indexrelid::regclass::text, indisunique, indisprimary,
-               pg_get_indexdef(indexrelid)
-        FROM pg_index WHERE indrelid = %s AND NOT indisprimary
-        ORDER BY indexrelid::regclass::text
+        SELECT i.indexrelid::regclass::text, i.indisunique, i.indisprimary,
+               pg_get_indexdef(i.indexrelid)
+        FROM pg_index i
+        WHERE i.indrelid = %s
+          AND NOT i.indisprimary
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pg_constraint constraint_record
+              WHERE constraint_record.conindid = i.indexrelid
+          )
+        ORDER BY i.indexrelid::regclass::text
     """, (oid,))
     indexes = [{'name': row[0].split('.')[-1].strip('"'), 'unique': row[1],
                 'primary': row[2], 'definition': row[3]} for row in cursor.fetchall()]
