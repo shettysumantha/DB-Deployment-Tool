@@ -273,6 +273,15 @@
               <h3>Function changes</h3>
             </div>
             <div class="results-tools">
+              <button id="selectAll" class="tool-btn">Select all</button>
+              <button id="deselectAll" class="tool-btn">Deselect all</button>
+              <button id="selectNew" class="tool-btn">Select new</button>
+              <button id="selectModified" class="tool-btn">
+                Select modified
+              </button>
+              <button id="selectMissing" class="tool-btn">
+                Select missing
+              </button>
               <div class="filter-tabs" role="tablist">
                 <button class="active" data-filter="ALL">All</button
                 ><button data-filter="NEW">New</button
@@ -280,8 +289,6 @@
                 ><button data-filter="IDENTICAL">Identical</button
                 ><button data-filter="MISSING">Missing</button>
               </div>
-              <button id="selectChanged" class="tool-btn">Select changed</button
-              ><button id="deselectAll" class="tool-btn">Clear</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -305,6 +312,24 @@
             </table>
           </div>
         </section>
+      </section>
+      <section class="generated-sql-panel history-panel mt-4">
+        <div class="results-head">
+          <div>
+            <span class="eyebrow">GENERATED SQL</span>
+            <h3>Selected deployment script</h3>
+          </div>
+          <div class="action-cluster">
+            <button id="generateBtnBottom" class="btn btn-primary" disabled>
+              Generate SQL
+            </button>
+            <button id="downloadSqlBtn" class="btn btn-outline-light" disabled>
+              Download SQL
+            </button>
+          </div>
+        </div>
+        <pre id="sqlPreview" class="sql-preview">
+Select objects and click Generate SQL.</pre>
       </section>
       <section id="tables" class="mt-5">
         <section class="results-panel">

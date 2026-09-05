@@ -46,6 +46,31 @@
   border-color: var(--cyan);
   color: var(--cyan);
 }
+.comparison-summary-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.comparison-summary-group strong {
+  font-size: 13px;
+  margin-right: 4px;
+}
+.sql-preview {
+  margin: 0;
+  min-height: 150px;
+  max-height: 360px;
+  overflow: auto;
+  background: #101a20;
+  border: 1px solid var(--line);
+  color: #d8e3e1;
+  padding: 16px;
+  font: 12px/1.6 "DM Mono";
+  white-space: pre-wrap;
+}
+.generated-sql-panel {
+  border-top: 3px solid var(--cyan);
+}
 .function-link {
   padding: 0;
   border: 0;

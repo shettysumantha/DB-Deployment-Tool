@@ -5,6 +5,7 @@ const state = {
   pendingKeys: [],
   tdConnected: false,
   liveConnected: false,
+  generatedSql: "",
 };
 const $ = (id) => document.getElementById(id);
 const json = async (url, options = {}) => {
@@ -34,16 +35,14 @@ function updateActions() {
   const ready = state.tdConnected && state.liveConnected;
   $("compareDashboardBtn").disabled = !ready;
   $("generateBtn").disabled = !selected.length;
+  $("generateBtnBottom").disabled = !selected.length;
   $("deployBtn").disabled = !selected.length;
-  $("selectChanged").disabled = !changed.length;
   if (typeof updateTableActions === "function") updateTableActions();
 }
 function statusCount(status) {
   return state.results.filter((x) => x.status === status).length;
 }
-function renderSummary() {
-  return;
-}
+function renderSummary() {}
 function renderResults() {
   const body = $("resultsBody");
   const visible = state.results.filter(
@@ -270,7 +269,7 @@ function renderComparisonSummary(items, label) {
     status,
     items.filter((item) => item.status === status).length,
   ]);
-  return `<div class="comparison-summary-group"><strong>${label} (${items.length})</strong>${counts.map(([status, count]) => `<button type="button" data-summary-status="${status}" data-summary-type="${label}">${status}: ${count}</button>`).join("")}</div>`;
+  return `<div class="comparison-summary-group"><strong>${label} (${items.length})</strong><button type="button" data-summary-status="ALL" data-summary-type="${label}">ALL: ${items.length}</button>${counts.map(([status, count]) => `<button type="button" data-summary-status="${status}" data-summary-type="${label}">${status}: ${count}</button>`).join("")}</div>`;
 }
 async function compareDashboard() {
   const source = $("tdForm").querySelector("[name=database_id]").value;
@@ -288,7 +287,10 @@ async function compareDashboard() {
         method: "POST",
         body: JSON.stringify({ function_search: search }),
       });
-      state.results = data.results.map((x) => ({ ...x, selected: false }));
+      state.results = data.results.map((x) => ({
+        ...x,
+        selected: x.status === "MISSING" || x.status === "MODIFIED",
+      }));
       renderSummary();
       renderResults();
       output += renderComparisonSummary(data.results, "Functions");
@@ -298,7 +300,10 @@ async function compareDashboard() {
         method: "POST",
         body: JSON.stringify({ table_search: search }),
       });
-      tableState.results = data.results.map((x) => ({ ...x, selected: false }));
+      tableState.results = data.results.map((x) => ({
+        ...x,
+        selected: x.status === "MISSING" || x.status === "MODIFIED",
+      }));
       renderTables();
       output += renderComparisonSummary(data.results, "Tables");
     }
@@ -385,10 +390,36 @@ async function generate() {
       body: JSON.stringify({ keys }),
     });
     showNotice(`${data.count} function(s) written to ${data.filename}.`);
-    window.location = data.download;
+    state.generatedSql = data.sql;
+    $("sqlPreview").textContent = data.sql;
+    $("downloadSqlBtn").disabled = false;
   } catch (error) {
     showNotice(error.message, true);
   }
+}
+function visibleFunctionItems() {
+  return state.results.filter(
+    (item) =>
+      (state.filter === "ALL" || item.status === state.filter) &&
+      `${item.name} ${item.signature}`.toLowerCase().includes(state.query),
+  );
+}
+function setSelectedForVisible(value) {
+  visibleFunctionItems().forEach((item) => {
+    if (item.status === "MISSING" || item.status === "MODIFIED")
+      item.selected = value;
+  });
+  renderResults();
+  updateActions();
+}
+function selectStatus(status) {
+  state.results
+    .filter((item) => item.status === status)
+    .forEach((item) => {
+      item.selected = true;
+    });
+  renderResults();
+  updateActions();
 }
 async function loadHistory() {
   try {
@@ -463,20 +494,13 @@ $("deployBtn").addEventListener("click", () =>
   openConfirm(state.results.filter((x) => x.selected).map((x) => x.key)),
 );
 $("confirmDeploy").addEventListener("click", deploy);
-$("selectChanged").addEventListener("click", () => {
-  state.results.forEach((x) => {
-    if (x.status === "NEW" || x.status === "MODIFIED") x.selected = true;
-  });
-  renderSummary();
-  renderResults();
-  updateActions();
-});
 $("deselectAll").addEventListener("click", () => {
-  state.results.forEach((x) => (x.selected = false));
-  renderSummary();
-  renderResults();
-  updateActions();
+  setSelectedForVisible(false);
 });
+$("selectAll").addEventListener("click", () => setSelectedForVisible(true));
+$("selectNew").addEventListener("click", () => selectStatus("NEW"));
+$("selectModified").addEventListener("click", () => selectStatus("MODIFIED"));
+$("selectMissing").addEventListener("click", () => selectStatus("MISSING"));
 document.querySelectorAll("[data-filter]").forEach((btn) =>
   btn.addEventListener("click", () => {
     document
@@ -508,6 +532,7 @@ $("comparisonSummary").addEventListener("click", (event) => {
   if (!button) return;
   if (button.dataset.summaryType === "Functions") {
     $("functions").scrollIntoView({ behavior: "smooth" });
+    if (button.dataset.summaryStatus === "ALL") state.filter = "ALL";
     document
       .querySelector(`[data-filter="${button.dataset.summaryStatus}"]`)
       ?.click();
@@ -517,6 +542,16 @@ $("comparisonSummary").addEventListener("click", (event) => {
       .querySelector(`[data-table-filter="${button.dataset.summaryStatus}"]`)
       ?.click();
   }
+});
+$("generateBtnBottom").addEventListener("click", generate);
+$("downloadSqlBtn").addEventListener("click", () => {
+  if (!state.generatedSql) return;
+  const blob = new Blob([state.generatedSql], { type: "text/sql" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `database_comparison_${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}.sql`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 });
 loadHistory();
 loadDatabases();

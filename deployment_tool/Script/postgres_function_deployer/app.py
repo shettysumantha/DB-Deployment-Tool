@@ -294,7 +294,8 @@ def generate():
     try:
         items = selected_items()
         path = generate_script(items, OUTPUT_DIR)
-        return jsonify({"success": True, "count": len(items), "filename": path.name, "download": f"/downloads/{path.name}"})
+        return jsonify({"success": True, "count": len(items), "filename": path.name,
+            "download": f"/downloads/{path.name}", "sql": path.read_text(encoding="utf-8")})
     except Exception as exc:
         return jsonify({"error": safe_error(exc)}), 400
 

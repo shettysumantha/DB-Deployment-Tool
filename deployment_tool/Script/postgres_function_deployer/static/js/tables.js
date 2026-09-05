@@ -1,8 +1,101 @@
-const tableState={results:[],filter:'ALL',query:'',pending:[]};
-function tableChanged(){return tableState.results.filter(item=>item.status==='MISSING'||item.status==='MODIFIED')}
-function updateTableActions(){const ready=state.tdConnected&&state.liveConnected;if($('compareDashboardBtn'))$('compareDashboardBtn').disabled=!ready}
-function renderTables(){const visible=tableState.results.filter(item=>(tableState.filter==='ALL'||item.status===tableState.filter)&&item.key.toLowerCase().includes(tableState.query));$('tableResultsBody').innerHTML=visible.length?visible.map(item=>`<tr><td>${item.status==='MISSING'||item.status==='MODIFIED'?`<input class="table-row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected?'checked':''}>`:''}</td><td>${escapeHtml(item.key)}</td><td><span class="badge-status badge-${item.status.replace(' ','-')}">${item.status}</span></td><td>${escapeHtml(item.changes.join('; '))}</td><td><button data-table-diff="${encodeURIComponent(item.key)}">View Changes</button></td></tr>`).join(''):'<tr><td colspan="5" class="empty-state">No tables match this view.</td></tr>';$('tableResultsBody').querySelectorAll('.table-row-check').forEach(el=>el.addEventListener('change',()=>{const item=tableState.results.find(x=>x.key===decodeURIComponent(el.dataset.key));item.selected=el.checked;updateTableActions()}));$('tableResultsBody').querySelectorAll('[data-table-diff]').forEach(el=>el.addEventListener('click',()=>openTableDiff(decodeURIComponent(el.dataset.tableDiff))))}
-async function compareTables(search=''){try{const data=await json('/api/tables/compare',{method:'POST',body:JSON.stringify({table_search:search})});tableState.results=data.results.map(item=>({...item,selected:item.status==='NEW'||item.status==='MODIFIED'}));renderTables();updateTableActions();showNotice(`Compared ${tableState.results.length} PostgreSQL tables.`)}catch(error){showNotice(error.message,true)}}
-function openTableDiff(key){const item=tableState.results.find(entry=>entry.key===key);if(!item)return;$('diffTitle').textContent=`Table: ${item.key}`;const changes=item.changes.map(change=>`<div class="change-row">${escapeHtml(change)}</div>`).join('');$('diffView').innerHTML=`<div class="schema-summary"><strong>Changes Found: ${item.changes.length}</strong>${changes}</div><div class="diff-column"><h4>LIVE / CURRENT</h4><pre>${escapeHtml(item.live?.definition||'Table does not exist in Live')}</pre></div><div class="diff-column"><h4>T&amp;D / PROPOSED</h4><pre>${escapeHtml(item.source?.definition||'Table is not present in selected T&D scope')}</pre></div>`;bootstrap.Modal.getOrCreateInstance($('diffModal')).show()}
-async function loadBackups(){try{const data=await json('/api/backups?'+new URLSearchParams({backup_file_name:$('backupSearch').value}));$('backupBody').innerHTML=data.backups.length?data.backups.map(item=>`<tr><td>${item.backup_id}</td><td>${escapeHtml(item.backup_file_name||'No file')}</td><td>${item.object_type}</td><td>${escapeHtml(`${item.schema_name}.${item.object_name}`)}</td><td>${escapeHtml(item.deployment_version)}</td><td>${escapeHtml(item.backup_created_at||'')}</td><td>${item.deployment_status}</td><td>${item.backup_file_name?`<a href="/api/backups/${item.backup_id}/view" target="_blank">View</a>`:''}</td></tr>`).join(''):'<tr><td colspan="8" class="empty-state">No backup metadata found.</td></tr>'}catch(error){showNotice(error.message,true)}}
-document.querySelectorAll('[data-table-filter]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-table-filter]').forEach(item=>item.classList.remove('active'));button.classList.add('active');tableState.filter=button.dataset.tableFilter;renderTables()}));$('backupSearch').addEventListener('input',loadBackups);loadBackups();
+const tableState = { results: [], filter: "ALL", query: "", pending: [] };
+function tableChanged() {
+  return tableState.results.filter(
+    (item) => item.status === "MISSING" || item.status === "MODIFIED",
+  );
+}
+function updateTableActions() {
+  const ready = state.tdConnected && state.liveConnected;
+  if ($("compareDashboardBtn")) $("compareDashboardBtn").disabled = !ready;
+}
+function renderTables() {
+  const visible = tableState.results.filter(
+    (item) =>
+      (tableState.filter === "ALL" || item.status === tableState.filter) &&
+      item.key.toLowerCase().includes(tableState.query),
+  );
+  $("tableResultsBody").innerHTML = visible.length
+    ? visible
+        .map(
+          (item) =>
+            `<tr><td>${item.status === "MISSING" || item.status === "MODIFIED" ? `<input class="table-row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}>` : ""}</td><td>${escapeHtml(item.key)}</td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td>${escapeHtml(item.changes.join("; "))}</td><td><button data-table-diff="${encodeURIComponent(item.key)}">View Changes</button></td></tr>`,
+        )
+        .join("")
+    : '<tr><td colspan="5" class="empty-state">No tables match this view.</td></tr>';
+  $("tableResultsBody")
+    .querySelectorAll(".table-row-check")
+    .forEach((el) =>
+      el.addEventListener("change", () => {
+        const item = tableState.results.find(
+          (x) => x.key === decodeURIComponent(el.dataset.key),
+        );
+        item.selected = el.checked;
+        updateTableActions();
+      }),
+    );
+  $("tableResultsBody")
+    .querySelectorAll("[data-table-diff]")
+    .forEach((el) =>
+      el.addEventListener("click", () =>
+        openTableDiff(decodeURIComponent(el.dataset.tableDiff)),
+      ),
+    );
+}
+async function compareTables(search = "") {
+  try {
+    const data = await json("/api/tables/compare", {
+      method: "POST",
+      body: JSON.stringify({ table_search: search }),
+    });
+    tableState.results = data.results.map((item) => ({
+      ...item,
+      selected: item.status === "MISSING" || item.status === "MODIFIED",
+    }));
+    renderTables();
+    updateTableActions();
+    showNotice(`Compared ${tableState.results.length} PostgreSQL tables.`);
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+}
+function openTableDiff(key) {
+  const item = tableState.results.find((entry) => entry.key === key);
+  if (!item) return;
+  $("diffTitle").textContent = `Table: ${item.key}`;
+  const changes = item.changes
+    .map((change) => `<div class="change-row">${escapeHtml(change)}</div>`)
+    .join("");
+  $("diffView").innerHTML =
+    `<div class="schema-summary"><strong>Changes Found: ${item.changes.length}</strong>${changes}</div><div class="diff-column"><h4>LIVE / CURRENT</h4><pre>${escapeHtml(item.live?.definition || "Table does not exist in Live")}</pre></div><div class="diff-column"><h4>T&amp;D / PROPOSED</h4><pre>${escapeHtml(item.source?.definition || "Table is not present in selected T&D scope")}</pre></div>`;
+  bootstrap.Modal.getOrCreateInstance($("diffModal")).show();
+}
+async function loadBackups() {
+  try {
+    const data = await json(
+      "/api/backups?" +
+        new URLSearchParams({ backup_file_name: $("backupSearch").value }),
+    );
+    $("backupBody").innerHTML = data.backups.length
+      ? data.backups
+          .map(
+            (item) =>
+              `<tr><td>${item.backup_id}</td><td>${escapeHtml(item.backup_file_name || "No file")}</td><td>${item.object_type}</td><td>${escapeHtml(`${item.schema_name}.${item.object_name}`)}</td><td>${escapeHtml(item.deployment_version)}</td><td>${escapeHtml(item.backup_created_at || "")}</td><td>${item.deployment_status}</td><td>${item.backup_file_name ? `<a href="/api/backups/${item.backup_id}/view" target="_blank">View</a>` : ""}</td></tr>`,
+          )
+          .join("")
+      : '<tr><td colspan="8" class="empty-state">No backup metadata found.</td></tr>';
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+}
+document.querySelectorAll("[data-table-filter]").forEach((button) =>
+  button.addEventListener("click", () => {
+    document
+      .querySelectorAll("[data-table-filter]")
+      .forEach((item) => item.classList.remove("active"));
+    button.classList.add("active");
+    tableState.filter = button.dataset.tableFilter;
+    renderTables();
+  }),
+);
+$("backupSearch").addEventListener("input", loadBackups);
+loadBackups();
