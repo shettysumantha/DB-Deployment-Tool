@@ -1,7 +1,7 @@
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 
@@ -9,7 +9,7 @@ from .db_service import connection
 
 
 # ==========================================================
-# LOAD .ENV
+# LOAD ENVIRONMENT
 # ==========================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,24 +21,33 @@ load_dotenv(
     override=True
 )
 
+
 # ==========================================================
 # APPLICATION DATABASE CONFIGURATION
 # ==========================================================
 
 def _application_database_config():
-    database_url = os.getenv("APP_DATABASE_URL", "").strip()
+    database_url = os.getenv(
+        "APP_DATABASE_URL",
+        ""
+    ).strip()
 
     if not database_url:
         return None
 
     parsed = urlparse(database_url)
 
-    if parsed.scheme not in ("postgresql", "postgres") or not parsed.hostname:
+    if (
+        parsed.scheme not in ("postgresql", "postgres")
+        or not parsed.hostname
+    ):
         raise ValueError(
             "APP_DATABASE_URL must be a PostgreSQL connection URL."
         )
 
-    query_params = parse_qs(parsed.query)
+    query_params = parse_qs(
+        parsed.query
+    )
 
     sslmode = query_params.get(
         "sslmode",
@@ -57,7 +66,10 @@ def _application_database_config():
 
 def application_database_configured():
     return bool(
-        os.getenv("APP_DATABASE_URL", "").strip()
+        os.getenv(
+            "APP_DATABASE_URL",
+            ""
+        ).strip()
     )
 
 
@@ -68,21 +80,153 @@ def application_database_configured():
 @contextmanager
 def registry_connection(live_config):
 
-    application_config = _application_database_config()
+    application_config = (
+        _application_database_config()
+    )
 
     if application_config:
-        with connection(application_config) as conn:
+
+        with connection(
+            application_config
+        ) as conn:
+
             yield conn
+
         return
 
+    # ------------------------------------------------------
     # Fallback to LIVE database only when
     # APP_DATABASE_URL is not configured.
-    with connection(live_config) as conn:
+    # ------------------------------------------------------
+
+    with connection(
+        live_config
+    ) as conn:
+
         yield conn
 
 
 # ==========================================================
+# REGISTRY TABLE INITIALIZATION
+#
+# IMPORTANT:
+# This function should be called ONCE during application
+# startup/deployment.
+#
+# Do NOT call this from:
+#   - insert_backup()
+#   - update_status()
+#   - search_backups()
+#
+# Otherwise CREATE TABLE / CREATE INDEX checks happen on
+# every request and add unnecessary database overhead.
+# ==========================================================
+
+def ensure_registry(config):
+
+    registry_ddl = """
+    CREATE TABLE IF NOT EXISTS public.tbl_deployment_backup_registry (
+        backup_id BIGSERIAL PRIMARY KEY,
+
+        object_type VARCHAR(20) NOT NULL,
+
+        schema_name VARCHAR(255) NOT NULL,
+
+        object_name VARCHAR(255) NOT NULL,
+
+        object_signature TEXT,
+
+        backup_file_name TEXT,
+
+        backup_file_path TEXT,
+
+        backup_file_type VARCHAR(20),
+
+        backup_created_at TIMESTAMPTZ,
+
+        deployment_version VARCHAR(100) NOT NULL,
+
+        deployment_id VARCHAR(100) NOT NULL,
+
+        deployment_type VARCHAR(40) NOT NULL,
+
+        source_environment VARCHAR(20)
+            NOT NULL DEFAULT 'T&D',
+
+        target_environment VARCHAR(20)
+            NOT NULL DEFAULT 'LIVE',
+
+        previous_object_status VARCHAR(20)
+            NOT NULL,
+
+        backup_reason VARCHAR(40)
+            NOT NULL DEFAULT 'PRE_DEPLOYMENT',
+
+        deployment_status VARCHAR(20)
+            NOT NULL DEFAULT 'PENDING',
+
+        deployed_at TIMESTAMPTZ,
+
+        deployed_by VARCHAR(255),
+
+        file_size_bytes BIGINT,
+
+        file_checksum CHAR(64),
+
+        notes TEXT,
+
+        created_at TIMESTAMPTZ
+            NOT NULL DEFAULT now(),
+
+        updated_at TIMESTAMPTZ
+            NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS
+        idx_backup_registry_file
+    ON public.tbl_deployment_backup_registry
+        (backup_file_name);
+
+    CREATE INDEX IF NOT EXISTS
+        idx_backup_registry_object
+    ON public.tbl_deployment_backup_registry
+        (object_name);
+
+    CREATE INDEX IF NOT EXISTS
+        idx_backup_registry_deployment
+    ON public.tbl_deployment_backup_registry
+        (deployment_id);
+
+    CREATE INDEX IF NOT EXISTS
+        idx_backup_registry_created
+    ON public.tbl_deployment_backup_registry
+        (backup_created_at);
+
+    CREATE INDEX IF NOT EXISTS
+        idx_backup_registry_version
+    ON public.tbl_deployment_backup_registry
+        (deployment_version);
+    """
+
+    with registry_connection(
+        config
+    ) as conn:
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                registry_ddl
+            )
+
+        conn.commit()
+
+
+# ==========================================================
 # INSERT BACKUP REGISTRY RECORD
+#
+# NOTE:
+# ensure_registry() is intentionally NOT called here.
+# The registry table must already be initialized.
 # ==========================================================
 
 def insert_backup(
@@ -97,13 +241,16 @@ def insert_backup(
     notes=""
 ):
 
-    with registry_connection(config) as conn:
+    with registry_connection(
+        config
+    ) as conn:
 
         with conn.cursor() as cursor:
 
             cursor.execute(
                 """
-                INSERT INTO public.tbl_deployment_backup_registry
+                INSERT INTO
+                    public.tbl_deployment_backup_registry
                 (
                     object_type,
                     schema_name,
@@ -147,35 +294,49 @@ def insert_backup(
                 """,
                 (
                     object_type,
+
                     record.get(
                         "schema",
                         "public"
                     ),
+
                     record["name"],
+
                     record.get(
                         "signature",
                         record.get("key")
                     ),
+
                     backup.get(
                         "file_name"
                     ),
+
                     backup.get(
                         "file_path"
                     ),
+
                     backup.get(
                         "created_at"
                     ),
+
                     version,
+
                     deployment_id,
+
                     deployment_type,
+
                     status,
+
                     status,
+
                     backup.get(
                         "size"
                     ),
+
                     backup.get(
                         "checksum"
                     ),
+
                     notes,
                 )
             )
@@ -191,6 +352,9 @@ def insert_backup(
 
 # ==========================================================
 # UPDATE DEPLOYMENT STATUS
+#
+# NOTE:
+# ensure_registry() is intentionally NOT called here.
 # ==========================================================
 
 def update_status(
@@ -199,18 +363,22 @@ def update_status(
     status
 ):
 
-    with registry_connection(config) as conn:
+    with registry_connection(
+        config
+    ) as conn:
 
         with conn.cursor() as cursor:
 
             cursor.execute(
                 """
-                UPDATE public.tbl_deployment_backup_registry
+                UPDATE
+                    public.tbl_deployment_backup_registry
                 SET
                     deployment_status = %s,
                     deployed_at = now(),
                     updated_at = now()
-                WHERE deployment_id = %s
+                WHERE
+                    deployment_id = %s
                 """,
                 (
                     status,
@@ -223,6 +391,9 @@ def update_status(
 
 # ==========================================================
 # SEARCH BACKUP REGISTRY
+#
+# NOTE:
+# ensure_registry() is intentionally NOT called here.
 # ==========================================================
 
 def search_backups(
@@ -230,7 +401,10 @@ def search_backups(
     params
 ):
 
+    params = params or {}
+
     clauses = []
+
     values = []
 
     searchable_fields = (
@@ -281,7 +455,8 @@ def search_backups(
             deployment_status,
             file_size_bytes,
             file_checksum
-        FROM public.tbl_deployment_backup_registry
+        FROM
+            public.tbl_deployment_backup_registry
         """
         + where_clause
         + """
@@ -291,7 +466,9 @@ def search_backups(
         """
     )
 
-    with registry_connection(config) as conn:
+    with registry_connection(
+        config
+    ) as conn:
 
         with conn.cursor() as cursor:
 
