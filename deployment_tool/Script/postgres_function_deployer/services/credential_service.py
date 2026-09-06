@@ -46,7 +46,7 @@ def _validate_database_url():
     if not APP_DB_URL:
         raise RuntimeError(
             "APP_DATABASE_URL is not configured.\n"
-            "Add the Render PostgreSQL application database "
+            "Add the PostgreSQL application database "
             "connection URL to the .env file."
         )
 
@@ -304,6 +304,16 @@ def connection_config(
             password,
     }
 
+    # ------------------------------------------------------
+    # SSL CONFIGURATION
+    # ------------------------------------------------------
+    # The current UI does not require the user to enter
+    # SSL mode. Render PostgreSQL requires SSL/TLS.
+    #
+    # If an SSL mode was saved in the database, use it.
+    # Otherwise default to "require".
+    # ------------------------------------------------------
+
     sslmode = str(
         (
             record or {}
@@ -312,11 +322,10 @@ def connection_config(
         ) or ""
     ).strip()
 
-    if sslmode:
+    if not sslmode:
+        sslmode = "require"
 
-        config["sslmode"] = (
-            sslmode
-        )
+    config["sslmode"] = sslmode
 
     return config
 
@@ -353,12 +362,22 @@ def save_database(
         or "local-user"
     )
 
+    # ------------------------------------------------------
+    # SSL MODE
+    # ------------------------------------------------------
+    # If the UI does not provide sslmode, save "require"
+    # so the configuration is ready for Render PostgreSQL.
+    # ------------------------------------------------------
+
     sslmode = str(
         config.get(
             "sslmode",
             ""
         )
     ).strip()
+
+    if not sslmode:
+        sslmode = "require"
 
     try:
 
@@ -473,12 +492,19 @@ def update_database(
         or "local-user"
     )
 
+    # ------------------------------------------------------
+    # SSL MODE
+    # ------------------------------------------------------
+
     sslmode = str(
         config.get(
             "sslmode",
             ""
         )
     ).strip()
+
+    if not sslmode:
+        sslmode = "require"
 
     try:
 
