@@ -93,6 +93,9 @@ result = {
     "failed": None,
 
     "backup_ids": [],
+    "backup_files": [
+        "test_backup.sql"
+    ],
 
     "success": True,
 

@@ -13,6 +13,7 @@ def deploy_records(config, records):
     deployment_id = "DEP_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_")
     version = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_ids = []
+    backup_files = []
     try:
         with connection(config) as conn:
             try:
@@ -21,9 +22,13 @@ def deploy_records(config, records):
                         try:
                             source_backup = create_backup("FUNCTION", item["source"], deployment_id, version, item["status"])
                             backup_ids.append(insert_backup(config, "FUNCTION", item["source"], source_backup, deployment_id, version, "FUNCTION_DEPLOYMENT", notes="T&D source snapshot"))
+                            if source_backup.get("file_path"):
+                               backup_files.append(source_backup["file_path"])
                             if item.get("live"):
                                 backup = create_backup("FUNCTION", item["live"], deployment_id, version, item["status"])
                                 backup_ids.append(insert_backup(config, "FUNCTION", item["live"], backup, deployment_id, version, "FUNCTION_DEPLOYMENT", notes="LIVE pre-deployment snapshot"))
+                                if backup.get("file_path"):
+                                    backup_files.append(backup["file_path"])
                             cursor.execute(generate_function_sql(item["source"]))
                         except Exception as exc:
                             conn.rollback()
@@ -39,7 +44,7 @@ def deploy_records(config, records):
                 conn.rollback()
                 raise
         update_status(config, deployment_id, "SUCCESS")
-        return {"success": True, "timestamp": started, "deployed": [item["key"] for item in ordered], "deployment_id": deployment_id, "backup_ids": backup_ids, "version": version}
+        return {"success": True, "timestamp": started, "deployed": [item["key"] for item in ordered], "deployment_id": deployment_id, "backup_ids": backup_ids,"backup_files": backup_files, "version": version}
     except Exception as exc:
         return {"success": False, "timestamp": started, "failed": ordered[0]["key"] if ordered else "", "error": str(exc)}
 
