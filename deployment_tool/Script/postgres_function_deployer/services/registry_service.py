@@ -1,4 +1,44 @@
+import os
+from contextlib import contextmanager
+from urllib.parse import urlparse
+
+import psycopg2
+
 from .db_service import connection
+
+
+def _application_database_config():
+    database_url = os.getenv("APP_DATABASE_URL", "").strip()
+    if not database_url:
+        return None
+
+    parsed = urlparse(database_url)
+    if parsed.scheme not in ("postgresql", "postgres") or not parsed.hostname:
+        raise ValueError("APP_DATABASE_URL must be a PostgreSQL connection URL.")
+
+    return {
+        "host": parsed.hostname,
+        "port": parsed.port or 5432,
+        "database": (parsed.path or "").lstrip("/"),
+        "username": parsed.username or "",
+        "password": parsed.password or "",
+        "sslmode": (dict(item.split("=", 1) for item in parsed.query.split("&") if "=" in item).get("sslmode") or "require"),
+    }
+
+
+def application_database_configured():
+    return bool(os.getenv("APP_DATABASE_URL", "").strip())
+
+
+@contextmanager
+def registry_connection(live_config):
+    application_config = _application_database_config()
+    if application_config:
+        with connection(application_config) as conn:
+            yield conn
+        return
+    with connection(live_config) as conn:
+        yield conn
 
 REGISTRY_DDL = """
 CREATE TABLE IF NOT EXISTS public.tbl_deployment_backup_registry (
@@ -22,14 +62,14 @@ CREATE INDEX IF NOT EXISTS idx_backup_registry_version ON public.tbl_deployment_
 
 
 def ensure_registry(config):
-    with connection(config) as conn:
+    with registry_connection(config) as conn:
         with conn.cursor() as cursor: cursor.execute(REGISTRY_DDL)
         conn.commit()
 
 
 def insert_backup(config, object_type, record, backup, deployment_id, version, deployment_type, status='PENDING', notes=''):
     ensure_registry(config)
-    with connection(config) as conn:
+    with registry_connection(config) as conn:
         with conn.cursor() as cursor:
             cursor.execute("""INSERT INTO public.tbl_deployment_backup_registry
                 (object_type,schema_name,object_name,object_signature,backup_file_name,backup_file_path,
@@ -47,7 +87,7 @@ def insert_backup(config, object_type, record, backup, deployment_id, version, d
 
 def update_status(config, deployment_id, status):
     ensure_registry(config)
-    with connection(config) as conn:
+    with registry_connection(config) as conn:
         with conn.cursor() as cursor:
             cursor.execute("UPDATE public.tbl_deployment_backup_registry SET deployment_status=%s, deployed_at=now(), updated_at=now() WHERE deployment_id=%s", (status, deployment_id))
         conn.commit()
@@ -59,7 +99,7 @@ def search_backups(config, params):
     for field in ('backup_id', 'backup_file_name', 'object_name', 'object_type', 'deployment_id', 'deployment_version', 'deployment_status'):
         if params.get(field): clauses.append(f'{field}::text ILIKE %s'); values.append(f"%{params[field]}%")
     where = (' WHERE ' + ' AND '.join(clauses)) if clauses else ''
-    with connection(config) as conn:
+    with registry_connection(config) as conn:
         with conn.cursor() as cursor:
             cursor.execute('SELECT backup_id, object_type, schema_name, object_name, backup_file_name, backup_file_path, deployment_version, backup_created_at, deployment_id, deployment_status, file_size_bytes, file_checksum FROM public.tbl_deployment_backup_registry' + where + ' ORDER BY backup_created_at DESC NULLS LAST LIMIT 200', values)
             columns = [item[0] for item in cursor.description]

@@ -13,7 +13,7 @@ from services.function_service import parse_expected
 from services.table_service import _signature as table_signature, compare_tables, fetch_selected as fetch_tables, fetch_table_names, parse_expected as parse_table_names
 from services.table_deployment_service import deploy_tables, generate_table_script
 from services.backup_service import create_backup, safe_backup_path
-from services.registry_service import ensure_registry, insert_backup, search_backups, update_status
+from services.registry_service import application_database_configured, ensure_registry, insert_backup, search_backups, update_status
 from services.sql_generator import generate_script
 from services.credential_service import connection_config, get_database, list_databases, save_database, update_database
 from services.notification_service import send_deployment_notification
@@ -417,7 +417,10 @@ def deployment_detail(deployment_id):
 @app.get("/api/backups/search")
 def backups():
     try:
-        return jsonify({"backups": search_backups(require_role("live"), request.args.to_dict())})
+        live_config = vault_for_session().get("live")
+        if not live_config and not application_database_configured():
+            raise ValueError("Connect the LIVE database first or configure APP_DATABASE_URL.")
+        return jsonify({"backups": search_backups(live_config, request.args.to_dict())})
     except Exception as exc:
         return jsonify({"error": safe_error(exc)}), 400
 
@@ -426,7 +429,10 @@ def backups():
 @app.get("/api/backups/<int:backup_id>/download")
 def backup_file(backup_id):
     try:
-        records = search_backups(require_role("live"), {"backup_id": str(backup_id)})
+        live_config = vault_for_session().get("live")
+        if not live_config and not application_database_configured():
+            raise ValueError("Connect the LIVE database first or configure APP_DATABASE_URL.")
+        records = search_backups(live_config, {"backup_id": str(backup_id)})
         if not records: return jsonify({"error": "Backup metadata was not found."}), 404
         path = safe_backup_path(records[0]["backup_file_path"])
         if not path.exists(): return jsonify({"error": "Backup file metadata exists, but the physical file was not found."}), 404

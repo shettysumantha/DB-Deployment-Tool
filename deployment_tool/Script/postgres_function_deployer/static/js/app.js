@@ -219,6 +219,9 @@ async function connect(form, role, url) {
     });
     setConnection(role, true);
     showConnected(form);
+    if (role === "live" && typeof loadBackups === "function") {
+      await loadBackups();
+    }
     showNotice(
       `${role === "td" ? "T&D" : "Live"} connected: ${data.database} on ${data.server_address || "server"}`,
     );

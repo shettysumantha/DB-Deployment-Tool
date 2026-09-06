@@ -82,7 +82,10 @@ EXPECTED_TABLES=
 TABLE_NAME_PATTERN=%
 CREDENTIALS_DB=database_credentials.sqlite3
 APP_USER=developer
+APP_DATABASE_URL=
 ```
+
+`APP_DATABASE_URL` is the PostgreSQL database used for saved connection metadata and `tbl_deployment_backup_registry`. When it is set, the backup list and backup metadata are stored there. If it is empty, the registry falls back to the connected Live database for backward compatibility.
 
 ### Database variables
 
@@ -231,6 +234,7 @@ FLASK_HOST (optional; Render can use 0.0.0.0 automatically)
 FLASK_DEBUG (false)
 CREDENTIALS_DB (optional)
 APP_USER (optional)
+APP_DATABASE_URL
 TD_DB_HOST, TD_DB_PORT, TD_DB_NAME, TD_DB_USER, TD_DB_PASSWORD, TD_DB_SSLMODE
 LIVE_DB_HOST, LIVE_DB_PORT, LIVE_DB_NAME, LIVE_DB_USER, LIVE_DB_PASSWORD, LIVE_DB_SSLMODE
 NOTIFICATION_EMAIL_TO
