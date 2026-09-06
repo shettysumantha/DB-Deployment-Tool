@@ -1,9 +1,10 @@
-﻿ .venv/
-
 .venv/
 .env
+__pycache__/
+*.pyc
+generated_scripts/
+database_credentials.sqlite3
 credentials.json
 token.json
+*.sqlite3
 backups/
-generated_scripts/
-

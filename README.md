@@ -25,7 +25,7 @@ deployment_tool/Script/postgres_function_deployer/README.md
 ## Quick start
 
 ```powershell
-cd "C:\Deployment Tool\DB-Deployment-Tool\deployment_tool\Script\postgres_function_deployer"
+cd "C:\DB Deployment Tool\Deployment-Tool\deployment_tool\Script\postgres_function_deployer"
 python -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1

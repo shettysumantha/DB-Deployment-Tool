@@ -1,596 +1,371 @@
 # PostgreSQL Function Deployment Manager
 
-A local Flask dashboard for comparing and deploying PostgreSQL functions and tables between a T&D/test database and a Live/production database. It treats overloaded functions as separate objects by schema, name, and identity arguments and includes comparison, script generation, deploy confirmation, and backup tracking.
+A Flask dashboard for comparing and deploying PostgreSQL functions and tables between a T&D/test database and a Live database. Existing comparison, SQL generation, deployment, backup, registry, history, and notification workflows are preserved.
 
-This README is the main developer setup guide for the project in this folder. It is intentionally detailed so a new developer can set up the app on a fresh machine without needing additional instructions.
+The application uses Brevo SMTP and environment variables. Gmail OAuth, `credentials.json`, and `token.json` are not required.
 
----
+## 1. Project Structure
 
-## 1. Project purpose
+```text
+Deployment-Tool/
+├── README.md
+└── deployment_tool/Script/postgres_function_deployer/
+    ├── app.py
+    ├── config.py
+    ├── requirements.txt
+    ├── .env.example
+    ├── test_notification.py
+    ├── services/
+    ├── templates/
+    ├── static/
+    └── generated_scripts/
+```
 
-This application allows a developer to:
+`app.py` exposes the Flask object named `app`. `config.py` loads local `.env` values with `python-dotenv`, while Render supplies the same values through its Environment Variables settings.
 
-- connect to a T&D/test PostgreSQL database
-- connect to a Live PostgreSQL database
-- compare functions and tables between environments
-- review differences before deployment
-- generate SQL deployment scripts
-- confirm deployment actions before execution
-- keep a record of deployment backups and metadata
+## 2. Requirements
 
----
-
-## 2. Minimum requirements
-
-Before setting up the project, ensure the following are installed:
+Install:
 
 - Git
-- Python 3.8 or newer
-- pip
-- PostgreSQL client connectivity
-- a local terminal or PowerShell shell
-- VS Code or another editor
-- access to a T&D database and a Live database
+- PowerShell
+- Python 3.11 (recommended; `.python-version` records this choice)
+- PostgreSQL access to both T&D/test and Live databases
+- A Brevo account for email notifications
 
-### Recommended versions
+Python 3.10 or newer is recommended. No Google or Brevo SDK is needed; SMTP uses Python's standard library.
 
-- Python: 3.8+; 3.10 or 3.11 recommended
-- Git: 2.x+
-- pip: latest available for the installed Python
-- PostgreSQL: 12+ preferred
-- VS Code: current stable version
+## 3. Windows Setup
 
----
-
-## 3. Required tools and dependencies
-
-### Python packages required
-
-The project dependency file is:
-
-```text
-requirements.txt
-```
-
-It contains:
-
-```text
-Flask>=3.0,<4
-psycopg2-binary==2.9.9
-python-dotenv>=1.0,<2
-```
-
-### Recommended tools
-
-- VS Code
-- Python extension
-- Pylance
-- pgAdmin or DBeaver
-- psql (optional)
-
-### Windows-specific dependency
-
-On Windows, `psycopg2` may fail with:
-
-```text
-ImportError: DLL load failed while importing _psycopg
-```
-
-Install the Microsoft Visual C++ Redistributable (x64) and retry the install.
-
----
-
-## 4. Project structure
-
-```text
-postgres_function_deployer/
-├── app.py
-├── config.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── __init__.py
-├── generated_scripts/
-├── static/
-│   ├── css/
-│   └── js/
-├── templates/
-│   └── index.html
-└── services/
-    ├── __init__.py
-    ├── backup_service.py
-    ├── comparison_service.py
-    ├── credential_service.py
-    ├── db_service.py
-    ├── deployment_service.py
-    ├── function_service.py
-    ├── registry_service.py
-    ├── sql_generator.py
-    ├── table_deployment_service.py
-    ├── table_service.py
-    └── ...
-```
-
-### Important files
-
-- `app.py` — application entry point
-- `config.py` — environment configuration
-- `requirements.txt` — Python dependencies
-- `.env.example` — sample environment file
-- `services/db_service.py` — database connection logic
-- `services/function_service.py` — function comparison logic
-- `services/registry_service.py` — backup registry table creation and record tracking
-- `services/credential_service.py` — SQLite metadata for saved DB configs
-
----
-
-## 5. Clone the project and open the folder
+Run these commands from the application directory:
 
 ```powershell
-cd "C:\Deployment Tool\DB-Deployment-Tool"
-```
-
-Then open the app folder:
-
-```powershell
-cd "C:\Deployment Tool\DB-Deployment-Tool\deployment_tool\Script\postgres_function_deployer"
-```
-
----
-
-## 6. Create and activate the virtual environment
-
-### Windows PowerShell
-
-```powershell
+cd "C:\DB Deployment Tool\Deployment-Tool\deployment_tool\Script\postgres_function_deployer"
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-If script execution is blocked:
-
-```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
-```
-
-### Windows CMD
-
-```cmd
-python -m venv .venv
-.venv\Scripts\activate.bat
-```
-
-### Linux/macOS
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-> Use the project venv, not the system Python.
-
----
-
-## 7. Install dependencies
-
-From the project folder with the venv active:
-
-```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-You can also install the exact packages directly:
-
-```powershell
-python -m pip install Flask>=3.0,<4 psycopg2-binary==2.9.9 python-dotenv>=1.0,<2
-```
-
-### Verify dependencies are available
-
-```powershell
-python -c "import flask, psycopg2, dotenv; print('dependencies ok')"
-```
-
-If this fails with a `psycopg2` DLL error, confirm that the project venv is being used and reinstall the pinned Windows wheel:
-
-```powershell
-python -m pip uninstall -y psycopg2-binary
-python -m pip install --no-cache-dir psycopg2-binary==2.9.9
-```
-
-If the error continues, install the Microsoft Visual C++ Redistributable (x64) and retry.
-
-### Google Gmail API notification setup
-
-Use the existing repository virtual environment. Do not delete or recreate it
-just because pip is missing; restore pip with `ensurepip` first.
-
-From the repository root:
-
-```powershell
-cd "C:\Deployment Tool\DB-Deployment-Tool"
-& ".\.venv\Scripts\python.exe" -m ensurepip --upgrade
-& ".\.venv\Scripts\python.exe" -m pip --version
-```
-
-Install the Gmail API packages:
-
-```powershell
-& ".\.venv\Scripts\python.exe" -m pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
-```
-
-Verify the packages:
-
-```powershell
-& ".\.venv\Scripts\python.exe" -c "import google; print('Google API package OK')"
-& ".\.venv\Scripts\python.exe" -c "from googleapiclient.discovery import build; print('Gmail API OK')"
-```
-
-Run the notification test:
-
-```powershell
-& ".\.venv\Scripts\python.exe" ".\deployment_tool\Script\postgres_function_deployer\test_notification.py"
-```
-
-The first run may require Google OAuth authorization. Keep `credentials.json`
-and the generated `token.json` local; both files are ignored by Git. The OAuth
-client JSON is not an email password and cannot authorize Gmail by itself.
-
----
-
-## 8. Configure environment settings
-
-Copy the sample environment file:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-On Linux/macOS:
-
-```bash
-cp .env.example .env
-```
-
-### `.env.example`
-
-```text
-FLASK_SECRET_KEY=replace-with-a-long-random-value
-FLASK_HOST=127.0.0.1
-FLASK_PORT=5000
-FLASK_DEBUG=false
-# Optional comma-separated or one-per-line names, in addition to %idatum% matches.
-EXPECTED_FUNCTIONS=
-```
-
-### Required variables
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `FLASK_SECRET_KEY` | Yes | Flask session secret; use a strong random value |
-| `FLASK_HOST` | Recommended | Local host, usually `127.0.0.1` |
-| `FLASK_PORT` | Recommended | Dev port, default `5000` |
-| `FLASK_DEBUG` | Optional | Enables debug mode when `true` |
-| `EXPECTED_FUNCTIONS` | Optional | Function names to match or highlight |
-| `EXPECTED_TABLES` | Optional | Table names to include in comparison scope |
-| `TABLE_NAME_PATTERN` | Optional | Table filter pattern, default `%` |
-| `CREDENTIALS_DB` | Optional | Alternate path for SQLite saved DB metadata |
-| `APP_USER` | Optional | Audit identity for saved database records |
-| `NOTIFICATION_EMAIL_TO` | Optional | Deployment email recipient |
-| `NOTIFICATION_MOBILE_TO` | Optional | Deployment mobile recipient |
-| `SMTP_HOST` | Optional | SMTP server; leave blank to disable email |
-| `SMTP_PORT` | Optional | SMTP port, default `587` |
-| `SMTP_USERNAME` | Optional | SMTP username |
-| `SMTP_PASSWORD` | Optional | SMTP password; keep local and uncommitted |
-| `GOOGLE_CREDENTIALS_FILE` | Optional | Local Google OAuth client JSON path; never commit it |
-| `GOOGLE_TOKEN_FILE` | Optional | Local OAuth token path created after consent; never commit it |
-| `MOBILE_NOTIFICATION_WEBHOOK` | Optional | Server-side webhook for mobile notifications |
-
-### Example `.env`
-
-```text
-FLASK_SECRET_KEY=replace-with-a-long-random-value-32-plus-chars
-FLASK_HOST=127.0.0.1
-FLASK_PORT=5000
-FLASK_DEBUG=false
-EXPECTED_FUNCTIONS=fn_example_one,fn_example_two
-EXPECTED_TABLES=customer,order_header
-TABLE_NAME_PATTERN=%
-CREDENTIALS_DB=C:/secure/path/database_credentials.sqlite3
-APP_USER=developer-name
-NOTIFICATION_EMAIL_TO=SUMANTHASHETTYTECH@GMAIL.COM
-NOTIFICATION_MOBILE_TO=1111111111
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USE_TLS=true
-SMTP_FROM=database-deployer@localhost
-SMTP_USERNAME=
-SMTP_PASSWORD=
-MOBILE_NOTIFICATION_WEBHOOK=
-```
-
-> Never commit `.env` to Git.
-
-Deployment notifications are optional and server-side. Email is sent only when
-`SMTP_HOST` is configured, and mobile delivery is sent only when
-`MOBILE_NOTIFICATION_WEBHOOK` is configured. Notification errors are reported
-after deployment and do not roll back a successful database deployment.
-
-### Google email credentials
-
-`credentials.json` is an OAuth client configuration, not an email password. It
-does not identify an email account or authorize sending by itself. Gmail email
-delivery also requires a one-time OAuth consent flow that creates a local token
-file. Keep both files outside Git:
-
-```text
-GOOGLE_CREDENTIALS_FILE=C:/Deployment Tool/DB-Deployment-Tool/credentials.json
-GOOGLE_TOKEN_FILE=C:/Deployment Tool/DB-Deployment-Tool/token.json
-```
-
-Do not place Gmail passwords, app passwords, OAuth tokens, or client secrets in
-source code or commit them. A Google OAuth client JSON alone cannot replace the
-required account authorization token.
-
----
-
-## 9. Database setup and requirements
-
-The app compares and deploys PostgreSQL functions and tables between a T&D/test database and a Live database.
-
-### Required database access
-
-You need:
-
-1. a T&D/test database that is reachable and readable
-2. a Live database that is reachable and controlled with least-privilege access
-
-### Required PostgreSQL permissions
-
-The connection user should have:
-
-- `CONNECT` rights to the target databases
-- access to relevant schemas
-- read access to PostgreSQL catalog metadata
-- ability to create or replace functions/tables in Live, if deployment is allowed
-
-### PostgreSQL functions used by the app
-
-The comparison code relies on standard PostgreSQL catalog functions such as:
-
-- `pg_get_function_identity_arguments`
-- `pg_get_function_arguments`
-- `pg_get_function_result`
-- `pg_get_functiondef`
-- `prosrc`
-
-No custom extension is required by default for basic comparison logic.
-
-### Database objects created at runtime
-
-#### SQLite metadata store
-
-The app uses a local SQLite database for saved connection metadata, such as:
-
-- alias
-- host
-- port
-- database name
-- username
-- audit metadata
-
-Passwords are not stored.
-
-#### PostgreSQL backup registry table
-
-The app creates a registry table for deployment history when connecting to the Live database:
-
-```sql
-CREATE TABLE IF NOT EXISTS public.tbl_deployment_backup_registry (
-    backup_id SERIAL PRIMARY KEY,
-    deployment_id VARCHAR(255),
-    deployment_version VARCHAR(255),
-    deployment_status VARCHAR(50),
-    object_type VARCHAR(100),
-    schema_name VARCHAR(255),
-    object_name VARCHAR(255),
-    object_signature TEXT,
-    backup_file_name VARCHAR(255),
-    backup_file_path TEXT,
-    backup_created_at TIMESTAMPTZ,
-    file_size_bytes BIGINT,
-    file_checksum VARCHAR(255)
-);
-```
-
-And indexes are created for registry usage.
-
----
-
-## 10. Start the backend
-
-From the project directory, start the app with the project interpreter:
-
-```powershell
-.\.venv\Scripts\python.exe app.py
-```
-
-Default URL:
-
-```text
-http://127.0.0.1:5000
-```
-
-### Port configuration
-
-Set the app port in `.env`:
-
-```text
-FLASK_PORT=5001
-```
-
-If port `5000` is already taken, either stop the conflicting process or change the port.
-
----
-
-## 11. Frontend
-
-The app serves its own UI from Flask using:
-
-- `templates/index.html`
-- `static/css/style.css`
-- `static/js/app.js`
-- `static/js/tables.js`
-
-No separate Node.js frontend build step is required.
-
-Open the app in your browser at:
-
-```text
-http://127.0.0.1:5000
-```
-
----
-
-## 12. API routes
-
-The project exposes routes such as:
-
-- `GET /databases`
-- `GET /api/databases`
-- `POST /databases/test-connection`
-- `POST /api/connect-td`
-- `POST /api/test-live-connection`
-- `POST /api/compare`
-- `GET /api/functions`
-- `POST /api/generate-script`
-- `POST /api/deploy-function`
-- `POST /api/deploy-selected`
-- `GET /api/deployment-history`
-
----
-
-## 13. Git hygiene and repo cleanup
-
-This project should ignore local environment files so Git does not show huge virtual-environment diffs.
-
-Add this to the repository root `.gitignore`:
-
-```text
-.venv/
-.env
-__pycache__/
-*.pyc
-generated_scripts/
-database_credentials.sqlite3
-```
-
-If `.venv` is already being tracked, remove it from Git tracking:
-
-```powershell
-git rm -r --cached .venv
-```
-
----
-
-## 14. Windows troubleshooting
-
-### A. PowerShell blocks script activation
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-```
-
-### B. `psycopg2` import fails with DLL error
-
-Use the project venv and reinstall the Python 3.8-compatible binary wheel:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install --no-cache-dir --force-reinstall psycopg2-binary==2.9.9
-```
-
-Then verify:
-
-```powershell
-.\.venv\Scripts\python.exe -c "import psycopg2; print(psycopg2.__version__)"
-```
-
-### C. `python app.py` is using the wrong Python
-
-Always run the app like this:
-
-```powershell
-.\.venv\Scripts\python.exe app.py
-```
-
----
-
-## 15. Common errors and fixes
-
-### Error: app cannot find `app.py`
-
-Fix:
-
-```powershell
-cd "C:\Deployment Tool\DB-Deployment-Tool\deployment_tool\Script\postgres_function_deployer"
-```
-
-### Error: `ModuleNotFoundError: No module named 'psycopg2'`
-
-Fix:
+If activation is blocked, run the `Set-ExecutionPolicy` command again in the same PowerShell session. The venv can also be used without activation:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### Error: `ImportError: DLL load failed while importing _psycopg`
+Verify dependencies:
 
-Fix:
+```powershell
+.\.venv\Scripts\python.exe -c "import flask, psycopg2, dotenv; print('dependencies OK')"
+```
 
-- use the project venv explicitly: `..\\.venv\\Scripts\\python.exe app.py`
-- install the Python 3.8-compatible binary wheel: `python -m pip install --no-cache-dir psycopg2-binary==2.9.9`
-- install Microsoft Visual C++ Redistributable (x64)
-- ensure you are using the venv Python, not the system Python
+## 4. Environment Configuration
 
-### Error: `Address already in use`
+Create a local file from the template:
 
-Fix:
+```powershell
+Copy-Item .env.example .env
+```
 
-- stop the process using the port, or
-- change `FLASK_PORT` in `.env`
+Edit `.env` locally. It may contain secrets and must never be pushed to GitHub. The template contains names only and no real credentials.
 
-### Error: database connection fails
+### Application variables
 
-Check:
+```env
+FLASK_SECRET_KEY=
+FLASK_HOST=127.0.0.1
+FLASK_PORT=5000
+FLASK_DEBUG=false
+EXPECTED_FUNCTIONS=
+EXPECTED_TABLES=
+TABLE_NAME_PATTERN=%
+CREDENTIALS_DB=database_credentials.sqlite3
+APP_USER=developer
+```
 
-- host and port are correct
-- database name is correct
-- username and password are correct
-- PostgreSQL is reachable from your machine
-- user has required read/deployment rights
+### Database variables
 
----
+The current workflow also supports saving database metadata through the application's SQLite credential registry. These variables document the established T&D and Live configuration names:
 
-## 16. Verification checklist
+```env
+TD_DB_HOST=
+TD_DB_PORT=5432
+TD_DB_NAME=
+TD_DB_USER=
+TD_DB_PASSWORD=
+TD_DB_SSLMODE=require
 
-The project is set up correctly when:
+LIVE_DB_HOST=
+LIVE_DB_PORT=5432
+LIVE_DB_NAME=
+LIVE_DB_USER=
+LIVE_DB_PASSWORD=
+LIVE_DB_SSLMODE=require
+```
 
-- the venv is active
-- dependencies install successfully
-- `.env` is configured
-- `python app.py` starts without import errors
-- the app loads at `http://127.0.0.1:5000`
-- T&D connection passes
-- Live connection passes
-- function comparison and script generation work
+Never put actual database passwords in source code or documentation. Use a least-privilege deployment account. Do not use `localhost` for a production database unless PostgreSQL is running on the same Render service, which is normally not the case.
 
----
+### Brevo SMTP variables
 
-## 17. Maintenance note
+```env
+NOTIFICATION_EMAIL_TO=
+BREVO_SMTP_HOST=smtp-relay.brevo.com
+BREVO_SMTP_PORT=587
+BREVO_SMTP_USERNAME=
+BREVO_SMTP_PASSWORD=
+NOTIFICATION_EMAIL_FROM=
+NOTIFICATION_EMAIL_FROM_NAME=PostgreSQL Deployment Manager
+```
 
-When new setup requirements, dependencies, version constraints, database privileges, or troubleshooting steps are identified, update this README to keep the setup instructions current and beginner-friendly.
+The SMTP username, password/key, sender, and recipients are read only when notification sending is used. They are not required for application startup. Brevo credentials belong in local `.env` or Render Environment Variables, never in GitHub.
 
-This document is the source of truth for project setup in this folder.
+### Optional mobile notification variables
+
+```env
+NOTIFICATION_MOBILE_TO=
+MOBILE_NOTIFICATION_WEBHOOK=
+```
+
+These are required only when the existing mobile notification integration is enabled.
+
+## 5. Local Notification Test
+
+Run:
+
+```powershell
+.\.venv\Scripts\python.exe test_notification.py
+```
+
+The script checks the same `BREVO_SMTP_*` names used by the application and never prints the password. A configured test reports:
+
+```text
+Email configured: YES
+SMTP host configured: YES
+SMTP username configured: YES
+SMTP password configured: YES
+Recipient configured: YES
+Email: SENT
+```
+
+`Email: FAILED` includes a safe error summary. `Email: NOT_CONFIGURED` means no recipient or complete SMTP configuration was supplied. This test does not create a backup; notification code only attaches backup files already created by deployment.
+
+## 6. Run Locally
+
+Development server:
+
+```powershell
+.\.venv\Scripts\python.exe app.py
+```
+
+Open `http://127.0.0.1:5000`.
+
+Health check:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:5000/health').read().decode())"
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+The server uses `FLASK_HOST` locally and Render's `PORT` when available. When `RENDER` is set without an explicit host, it binds to `0.0.0.0`.
+
+Production-style local startup:
+
+```powershell
+python -m gunicorn app:app
+```
+
+The same command is used on Render. Stop a development server with `Ctrl+C` before starting another process on the same port.
+
+## 7. Deployment and Backup Behavior
+
+The existing deployment logic remains responsible for:
+
+- function and table comparison
+- overloaded function identification
+- SQL generation
+- deployment confirmation and execution
+- pre-deployment backup creation
+- backup registry and deployment history
+
+The notification service does not create backups. It only references or attaches files already present in the deployment result. Render's local filesystem is ephemeral, so generated SQL, backups, and the local SQLite registry can disappear after restart or redeploy. Use durable external storage or a durable database if those artifacts must survive; this project does not upload them automatically.
+
+A successful database deployment remains successful if email or mobile notification fails. Failure notification is attempted when a deployment returns a failure result, and notification errors are returned separately.
+
+## 8. Render Deployment - After GitHub Push
+
+Deployment is intentionally not performed by this guide.
+
+1. Push the reviewed project to GitHub.
+2. Create a Render Web Service.
+3. Connect the GitHub repository.
+4. Select the intended branch.
+5. Set Root Directory to `deployment_tool/Script/postgres_function_deployer`.
+6. Set Build Command to `pip install -r requirements.txt`.
+7. Set Start Command to `gunicorn app:app`.
+8. Add the application, database, Brevo, and optional mobile variables in Render Environment Variables.
+9. Confirm the production PostgreSQL hosts are reachable from Render.
+10. Deploy from the Render dashboard.
+11. Check Render build and runtime logs.
+12. Test `https://YOUR-RENDER-SERVICE.onrender.com/health`.
+13. Run a controlled notification test with configured Brevo values.
+14. Test T&D and Live database connections.
+15. Perform a controlled deployment test with approved objects.
+
+Do not upload `.env`. Do not push Brevo credentials, database passwords, API keys, `credentials.json`, or `token.json`. Render Environment Variables are the production secret store.
+
+Render supplies `PORT`; do not hard-code the production port. The web service must be able to reach both PostgreSQL servers through their real network addresses and firewall rules.
+
+## 9. Render Environment Variable Names
+
+Configure names only through the Render dashboard:
+
+```text
+FLASK_SECRET_KEY
+FLASK_HOST (optional; Render can use 0.0.0.0 automatically)
+FLASK_DEBUG (false)
+CREDENTIALS_DB (optional)
+APP_USER (optional)
+TD_DB_HOST, TD_DB_PORT, TD_DB_NAME, TD_DB_USER, TD_DB_PASSWORD, TD_DB_SSLMODE
+LIVE_DB_HOST, LIVE_DB_PORT, LIVE_DB_NAME, LIVE_DB_USER, LIVE_DB_PASSWORD, LIVE_DB_SSLMODE
+NOTIFICATION_EMAIL_TO
+BREVO_SMTP_HOST, BREVO_SMTP_PORT, BREVO_SMTP_USERNAME, BREVO_SMTP_PASSWORD
+NOTIFICATION_EMAIL_FROM, NOTIFICATION_EMAIL_FROM_NAME
+NOTIFICATION_MOBILE_TO, MOBILE_NOTIFICATION_WEBHOOK (optional)
+```
+
+## 10. Git Security
+
+The application directory `.gitignore` protects `.env`, `credentials.json`, `token.json`, `.venv/`, `__pycache__/`, `*.pyc`, `database_credentials.sqlite3`, `generated_scripts/`, and backups. Check before a future push:
+
+```powershell
+git status --short
+git ls-files | Select-String -Pattern '(^|/)(\.env|credentials\.json|token\.json|database_credentials\.sqlite3)$'
+```
+
+If a secret has ever been committed, rotate it and remove it from Git history using your organization's approved process. Do not print secrets while diagnosing configuration.
+
+## 11. Troubleshooting
+
+### Python not found
+
+- Error: `python is not recognized`.
+- Cause: Python is not installed or is not on `PATH`.
+- Check: `py --version`.
+- Fix: install Python 3.11 and enable the PATH option, then recreate the venv.
+
+### Virtual environment activation failure
+
+- Error: script execution is disabled.
+- Cause: PowerShell execution policy.
+- Check: `Get-ExecutionPolicy -List`.
+- Fix: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then run `..\.venv\Scripts\Activate.ps1`.
+
+### pip missing
+
+- Error: `No module named pip`.
+- Cause: incomplete venv.
+- Check: `..\.venv\Scripts\python.exe -m pip --version`.
+- Fix: `..\.venv\Scripts\python.exe -m ensurepip --upgrade` followed by `..\.venv\Scripts\python.exe -m pip install --upgrade pip`.
+
+### Requirements installation failure
+
+- Error: package installation fails.
+- Cause: wrong interpreter, network issue, or stale package cache.
+- Check: `..\.venv\Scripts\python.exe -m pip --version`.
+- Fix: activate the venv, upgrade pip, and retry `python -m pip install -r requirements.txt`.
+
+### psycopg2 DLL error on Windows
+
+- Error: `ImportError: DLL load failed` while importing psycopg2.
+- Cause: incompatible interpreter or missing Microsoft runtime.
+- Check: `..\.venv\Scripts\python.exe -c "import psycopg2; print('psycopg2 OK')"`.
+- Fix: reinstall `psycopg2-binary` in the venv and install the Microsoft Visual C++ Redistributable if required.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --no-cache-dir --force-reinstall psycopg2-binary==2.9.9
+```
+
+### Missing module
+
+- Error: `ModuleNotFoundError`.
+- Cause: dependencies were installed into another Python environment.
+- Check: `..\.venv\Scripts\python.exe -m pip show Flask psycopg2-binary python-dotenv gunicorn`.
+- Fix: run the application with the venv interpreter and reinstall requirements.
+
+### Gunicorn startup failure
+
+- Error: `Failed to find attribute 'app'` or import error.
+- Cause: wrong working directory or target.
+- Check: run from `deployment_tool/Script/postgres_function_deployer`.
+- Fix: use `python -m gunicorn app:app` locally or `gunicorn app:app` on Render.
+
+### Port already in use
+
+- Error: address or port already in use.
+- Cause: another Flask/Gunicorn process owns the port.
+- Check: `Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue`.
+- Fix: stop the owning process or change local `FLASK_PORT`; never override Render's `PORT`.
+
+### .env not loading
+
+- Error: values appear unconfigured.
+- Cause: `.env` is missing, in the wrong directory, or has malformed lines.
+- Check: `Test-Path .env` and compare names with `.env.example`.
+- Fix: run `Copy-Item .env.example .env`, edit it, and restart the process. Never print secret values.
+
+### Brevo SMTP configuration failure
+
+- Error: `NOT_CONFIGURED` or SMTP authentication failure.
+- Cause: missing recipient, sender, host, username, password, or unverified sender.
+- Check: `python test_notification.py`; it prints presence checks only.
+- Fix: set the exact `BREVO_SMTP_*` and `NOTIFICATION_EMAIL_*` names and verify the sender in Brevo.
+
+### Database connection failure
+
+- Error: connection refused, timeout, authentication, or SSL error.
+- Cause: incorrect host, port, database, account, SSL mode, firewall, or Render network access.
+- Check: test each T&D and Live connection in the application and verify the host is not an unintended `localhost`.
+- Fix: correct the environment values and provider firewall rules. Do not fabricate credentials or change a production database from this project.
+
+### Health check failure
+
+- Error: `/health` returns 404 or cannot connect.
+- Cause: stale process, wrong port, wrong root directory, or wrong Gunicorn target.
+- Check: open `/health` on the actual local or Render URL and inspect logs.
+- Fix: restart from the app directory with `python app.py` locally or `gunicorn app:app` on Render.
+
+### Render build failure
+
+- Error: dependency installation fails in Render logs.
+- Cause: incorrect Root Directory or Build Command.
+- Check: confirm Root Directory is `deployment_tool/Script/postgres_function_deployer`.
+- Fix: use `pip install -r requirements.txt` and check the Python version/runtime settings.
+
+### Render start failure
+
+- Error: service exits during startup.
+- Cause: incorrect Start Command, missing required import, or invalid configuration.
+- Check: review runtime logs and verify `gunicorn app:app` from the configured root.
+- Fix: correct the command or dependency; database and SMTP values are only needed when those features are used.
+
+## 12. Validation Commands
+
+Run before a future commit:
+
+```powershell
+.\.venv\Scripts\python.exe -m compileall .
+.\.venv\Scripts\python.exe test_notification.py
+python -m gunicorn app:app
+```
+
+With the server running, check `/health`. Database tests are skipped when real credentials have not been supplied. Do not create fake production credentials or connect to a real production database during local validation.
+
+## 13. Maintenance
+
+Update this README whenever dependencies, environment variables, database privileges, deployment requirements, backup behavior, or troubleshooting steps change. Preserve the existing comparison, deployment, backup, registry, and notification contracts when making future changes.

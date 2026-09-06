@@ -1,11 +1,13 @@
 .env
 credentials.json
 token.json
+.venv/
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
 .generated/
-generated_scripts/*.sql
+generated_scripts/
 database_credentials.sqlite3
 logs/*.log
-.venv/
 backups/

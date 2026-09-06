@@ -1,77 +1,35 @@
-import base64
 import json
 import os
+import re
+import smtplib
 import urllib.request
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
-from email.message import EmailMessage
 
 from dotenv import load_dotenv
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-
-
-# ==========================================================
-# PATH CONFIGURATION
-# ==========================================================
-
-# Current file:
-# postgres_function_deployer/services/notification_service.py
 
 SERVICES_DIR = Path(__file__).resolve().parent
-
-# postgres_function_deployer
 DEPLOYER_DIR = SERVICES_DIR.parent
-
-# DB-Deployment-Tool
-PROJECT_ROOT = DEPLOYER_DIR.parents[2]
-
-# Environment file
 ENV_FILE = DEPLOYER_DIR / ".env"
+load_dotenv(dotenv_path=ENV_FILE, override=True)
 
-# Google OAuth files
-DEFAULT_CREDENTIALS_FILE = PROJECT_ROOT / "credentials.json"
-DEFAULT_TOKEN_FILE = PROJECT_ROOT / "token.json"
+MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 
-
-# ==========================================================
-# LOAD ENVIRONMENT VARIABLES
-# ==========================================================
-
-load_dotenv(
-    dotenv_path=ENV_FILE,
-    override=True
-)
-
-
-# ==========================================================
-# GMAIL API
-# ==========================================================
-
-GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.send"
-]
-
-
-# ==========================================================
-# DEPLOYMENT SUMMARY
-# ==========================================================
 
 def _summary(result):
     deployed = result.get("deployed") or []
     failed = result.get("failed")
-
     if isinstance(failed, list):
         failed_items = failed
     elif failed:
         failed_items = [failed]
     else:
         failed_items = []
-
     backup_ids = result.get("backup_ids") or []
-
     return {
         "deployment_id": result.get("deployment_id", ""),
         "timestamp": result.get("timestamp", ""),
@@ -83,375 +41,148 @@ def _summary(result):
     }
 
 
-# ==========================================================
-# EMAIL BODY
-# ==========================================================
+def _normalize_recipients(value):
+    if not value:
+        return []
+    return [item.strip() for item in re.split(r"[,;]", str(value)) if item.strip()]
+
 
 def _message(summary):
-
-    status = (
-        "SUCCESS"
-        if summary["success"]
-        else "FAILED"
-    )
-
-    deployed = "\n".join(
-        f"- {item}"
-        for item in summary["deployed"]
-    ) or "- None"
-
-    failed = "\n".join(
-        f"- {item}"
-        for item in summary["failed"]
-    ) or "- None"
-
-    backup_ids = ", ".join(
-        map(str, summary["backup_ids"])
-    ) or "None"
-
+    status = "SUCCESS" if summary["success"] else "FAILED"
+    deployed = "\n".join(f"- {item}" for item in summary["deployed"]) or "- None"
+    failed = "\n".join(f"- {item}" for item in summary["failed"]) or "- None"
+    backup_ids = ", ".join(map(str, summary["backup_ids"])) or "None"
     return (
         f"Database deployment: {status}\n"
         f"Date/time: {summary['timestamp']}\n"
-        f"Deployment: {summary['deployment_id']}\n"
+        f"Deployment ID: {summary['deployment_id']}\n"
         f"Source: T&D\n"
-        f"Target: LIVE\n"
-        f"Successful objects: {len(summary['deployed'])}\n"
-        f"Failed objects: {len(summary['failed'])}\n"
+        f"Target: LIVE\n\n"
+        f"Successful objects:\n{deployed}\n\n"
+        f"Failed objects:\n{failed}\n\n"
         f"Backup references: {backup_ids}\n\n"
-        f"Successful:\n"
-        f"{deployed}\n\n"
-        f"Failed:\n"
-        f"{failed}\n\n"
+        f"Backup files attached:\n- Check the attachment list below\n\n"
         f"Error: {summary['error'] or 'None'}\n"
     )
 
 
-# ==========================================================
-# RESOLVE GOOGLE FILE PATH
-# ==========================================================
-
-def _resolve_project_path(value, default_path):
-
-    value = (value or "").strip()
-
-    if not value:
-        return default_path
-
-    path = Path(value)
-
-    if path.is_absolute():
-        return path
-
-    return PROJECT_ROOT / path
-
-
-# ==========================================================
-# GMAIL AUTHENTICATION
-# ==========================================================
-
-def _get_gmail_service():
-
-    credentials_file = _resolve_project_path(
-        os.getenv("GOOGLE_CREDENTIALS_FILE"),
-        DEFAULT_CREDENTIALS_FILE
-    )
-
-    token_file = _resolve_project_path(
-        os.getenv("GOOGLE_TOKEN_FILE"),
-        DEFAULT_TOKEN_FILE
-    )
-
-    # ------------------------------------------------------
-    # Validate credentials.json
-    # ------------------------------------------------------
-
-    if not credentials_file.exists():
-
-        raise FileNotFoundError(
-            "Google OAuth credentials file not found:\n"
-            f"{credentials_file}\n\n"
-            "Place credentials.json in the project root or "
-            "configure GOOGLE_CREDENTIALS_FILE in .env."
-        )
-
-    credentials = None
-
-    # ------------------------------------------------------
-    # Load existing token
-    # ------------------------------------------------------
-
-    if token_file.exists():
-
-        try:
-
-            credentials = (
-                Credentials
-                .from_authorized_user_file(
-                    str(token_file),
-                    GMAIL_SCOPES
-                )
-            )
-
-        except Exception:
-
-            credentials = None
-
-    # ------------------------------------------------------
-    # Authenticate / refresh
-    # ------------------------------------------------------
-
-    if not credentials or not credentials.valid:
-
-        # Existing refresh token
-        if (
-            credentials
-            and credentials.expired
-            and credentials.refresh_token
-        ):
-
-            credentials.refresh(
-                Request()
-            )
-
-        # First-time authorization
+def _normalize_backup_paths(result):
+    values = []
+    for key in ("backup_file", "backup_file_path", "backup_path", "backup_files", "backup_file_paths"):
+        value = result.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            values.extend(list(value))
         else:
-
-            flow = (
-                InstalledAppFlow
-                .from_client_secrets_file(
-                    str(credentials_file),
-                    GMAIL_SCOPES
-                )
-            )
-
-            credentials = flow.run_local_server(
-                port=0
-            )
-
-        # Save token
-        token_file.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        with open(
-            token_file,
-            "w",
-            encoding="utf-8"
-        ) as token:
-
-            token.write(
-                credentials.to_json()
-            )
-
-    # ------------------------------------------------------
-    # Build Gmail service
-    # ------------------------------------------------------
-
-    return build(
-        "gmail",
-        "v1",
-        credentials=credentials
-    )
+            values.append(value)
+    normalized = []
+    for item in values:
+        if isinstance(item, Path):
+            normalized.append(str(item))
+        elif isinstance(item, str):
+            normalized.append(item)
+    return normalized
 
 
-# ==========================================================
-# SEND EMAIL
-# ==========================================================
+def _collect_backup_attachments(result):
+    files = []
+    seen = set()
+    for raw_path in _normalize_backup_paths(result):
+        candidate = Path(str(raw_path)).expanduser()
+        if not candidate.is_absolute():
+            candidate = (DEPLOYER_DIR / candidate).resolve()
+        if candidate.exists() and candidate.is_file():
+            resolved = str(candidate.resolve())
+            if resolved not in seen:
+                seen.add(resolved)
+                files.append(candidate)
+    return files
 
-def _send_email(
-    to_email,
-    subject,
-    body
-):
 
-    service = _get_gmail_service()
+def _send_email_with_smtp(subject, body, recipients, attachments=None):
+    smtp_host = os.getenv("BREVO_SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("BREVO_SMTP_PORT", "587") or 587)
+    username = os.getenv("BREVO_SMTP_USERNAME", "").strip()
+    password = os.getenv("BREVO_SMTP_PASSWORD", "").strip()
+    from_email = os.getenv("NOTIFICATION_EMAIL_FROM", "").strip()
+    from_name = os.getenv("NOTIFICATION_EMAIL_FROM_NAME", "PostgreSQL Deployment Manager").strip()
+    if not all([smtp_host, username, password, from_email]):
+        raise ValueError("Brevo SMTP is not fully configured.")
 
-    message = EmailMessage()
-
-    message["To"] = to_email
+    message = MIMEMultipart()
+    message["From"] = f"{from_name} <{from_email}>" if from_name else from_email
+    message["To"] = ", ".join(recipients)
     message["Subject"] = subject
+    message.attach(MIMEText(body, "plain", "utf-8"))
 
-    message.set_content(body)
+    for attachment in attachments or []:
+        size = attachment.stat().st_size
+        if size > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"Attachment too large to send: {attachment.name} ({size} bytes)")
+        with attachment.open("rb") as file_handle:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(file_handle.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=attachment.name)
+        message.attach(part)
 
-    encoded_message = (
-        base64.urlsafe_b64encode(
-            message.as_bytes()
-        )
-        .decode("utf-8")
-    )
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+        server.starttls()
+        server.login(username, password)
+        server.sendmail(from_email, recipients, message.as_string())
 
-    result = (
-        service
-        .users()
-        .messages()
-        .send(
-            userId="me",
-            body={
-                "raw": encoded_message
-            }
-        )
-        .execute()
-    )
-
-    return result
+    return True
 
 
-# ==========================================================
-# MOBILE WEBHOOK
-# ==========================================================
-
-def _send_mobile_notification(
-    webhook,
-    mobile_to,
-    body
-):
-
-    payload = json.dumps(
-        {
-            "to": mobile_to,
-            "message": body
-        }
-    ).encode("utf-8")
-
+def _send_mobile_notification(webhook, mobile_to, body):
+    payload = json.dumps({"to": mobile_to, "message": body}).encode("utf-8")
     request = urllib.request.Request(
         webhook,
         data=payload,
-        headers={
-            "Content-Type": "application/json"
-        },
-        method="POST"
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-
-    with urllib.request.urlopen(
-        request,
-        timeout=10
-    ) as response:
-
+    with urllib.request.urlopen(request, timeout=10) as response:
         response.read()
-
         return response.status
 
 
-# ==========================================================
-# MAIN NOTIFICATION FUNCTION
-# ==========================================================
-
 def send_deployment_notification(result):
-
     summary = _summary(result)
-
     body = _message(summary)
 
-    # ------------------------------------------------------
-    # Read configuration
-    # ------------------------------------------------------
-
-    email_to = os.getenv(
-        "NOTIFICATION_EMAIL_TO",
-        ""
-    ).strip()
-
-    mobile_to = os.getenv(
-        "NOTIFICATION_MOBILE_TO",
-        ""
-    ).strip()
-
-    webhook = os.getenv(
-        "MOBILE_NOTIFICATION_WEBHOOK",
-        ""
-    ).strip()
+    email_recipients = _normalize_recipients(os.getenv("NOTIFICATION_EMAIL_TO", ""))
+    mobile_to = os.getenv("NOTIFICATION_MOBILE_TO", "").strip()
+    webhook = os.getenv("MOBILE_NOTIFICATION_WEBHOOK", "").strip()
 
     email_sent = False
     mobile_sent = False
-
     errors = []
+    backup_files = _collect_backup_attachments(result)
+    backup_files_attached = [str(path) for path in backup_files]
 
-    # ======================================================
-    # EMAIL
-    # ======================================================
-
-    if email_to:
-
+    if email_recipients:
         try:
-
-            subject = (
-                "Database deployment completed"
-                if summary["success"]
-                else "Database deployment failed"
-            )
-
-            _send_email(
-                email_to,
-                subject,
-                body
-            )
-
+            subject = "SUCCESS: Database deployment completed" if summary["success"] else "FAILURE: Database deployment failed"
+            _send_email_with_smtp(subject, body, email_recipients, backup_files)
             email_sent = True
-
         except Exception as exc:
-
-            errors.append(
-                f"email: {type(exc).__name__}: {exc}"
-            )
-
-    # ======================================================
-    # MOBILE
-    # ======================================================
+            errors.append(f"email: {type(exc).__name__}: {exc}")
 
     if webhook and mobile_to:
-
         try:
-
-            _send_mobile_notification(
-                webhook,
-                mobile_to,
-                body
-            )
-
+            _send_mobile_notification(webhook, mobile_to, body)
             mobile_sent = True
-
         except Exception as exc:
+            errors.append(f"mobile: {type(exc).__name__}: {exc}")
 
-            errors.append(
-                f"mobile: {type(exc).__name__}: {exc}"
-            )
-
-    # ======================================================
-    # RESULT
-    # ======================================================
-
-    configured = bool(
-        email_to
-        or (webhook and mobile_to)
-    )
-
+    configured = bool(email_recipients or (webhook and mobile_to))
     return {
-        "email": (
-            "SENT"
-            if email_sent
-            else (
-                "FAILED"
-                if email_to
-                else "NOT_CONFIGURED"
-            )
-        ),
-
-        "mobile": (
-            "SENT"
-            if mobile_sent
-            else (
-                "FAILED"
-                if webhook and mobile_to
-                else "NOT_CONFIGURED"
-            )
-        ),
-
+        "email": "SENT" if email_sent else ("FAILED" if email_recipients else "NOT_CONFIGURED"),
+        "mobile": "SENT" if mobile_sent else ("FAILED" if webhook and mobile_to else "NOT_CONFIGURED"),
+        "backup_files_attached": backup_files_attached,
         "errors": errors,
-
         "configured": configured,
-
-        "notification_success": (
-            email_sent or mobile_sent
-        ),
+        "notification_success": bool(email_sent or mobile_sent),
     }

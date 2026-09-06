@@ -16,20 +16,27 @@ def clean_config(payload):
         raise ValueError("Port must be a number.") from exc
     if not 1 <= values["port"] <= 65535:
         raise ValueError("Port must be between 1 and 65535.")
+    sslmode = str(payload.get("sslmode", "")).strip()
+    if sslmode:
+        values["sslmode"] = sslmode
     return values
 
 
 @contextmanager
 def connection(config):
-    conn = psycopg2.connect(
-        host=config["host"],
-        port=config["port"],
-        dbname=config["database"],
-        user=config["username"],
-        password=config["password"],
-        connect_timeout=10,
-        application_name="postgres-function-deployer",
-    )
+    connection_kwargs = {
+        "host": config["host"],
+        "port": config["port"],
+        "dbname": config["database"],
+        "user": config["username"],
+        "password": config["password"],
+        "connect_timeout": 10,
+        "application_name": "postgres-function-deployer",
+    }
+    sslmode = str(config.get("sslmode", "")).strip()
+    if sslmode:
+        connection_kwargs["sslmode"] = sslmode
+    conn = psycopg2.connect(**connection_kwargs)
     try:
         yield conn
     finally:

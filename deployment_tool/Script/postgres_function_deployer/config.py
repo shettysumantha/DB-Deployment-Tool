@@ -22,6 +22,6 @@ EXPECTED_TABLES = [
 TABLE_NAME_PATTERN = os.getenv("TABLE_NAME_PATTERN", "%")
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "local-development-only-change-me")
-HOST = os.getenv("FLASK_HOST", "127.0.0.1")
-PORT = int(os.getenv("FLASK_PORT", "5000"))
+HOST = os.getenv("FLASK_HOST") or ("0.0.0.0" if os.getenv("RENDER") else "127.0.0.1")
+PORT = int(os.getenv("PORT") or os.getenv("FLASK_PORT", "5000"))
 DEBUG = os.getenv("FLASK_DEBUG", "false").lower() == "true"
