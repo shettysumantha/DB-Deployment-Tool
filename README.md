@@ -67,6 +67,64 @@ DB-Deployment-Tool/
 │           └── generated_scripts/
 ```
 
+# ==========================================================
+# DB Deployment Tool - Git Workflow
+# ==========================================================
+
+# 1. Go to project
+cd "C:\DB Deployment Tool\Deployment-Tool"
+
+# 2. Check status
+git status
+
+# 3. Switch to T&D
+git checkout "t&d"
+
+# 4. Get latest T&D
+git pull origin "t&d"
+
+# 5. Add changes
+git add .
+
+# 6. Verify changes
+git status
+
+# 7. Commit
+git commit -m "perf: optimize database connection and registry access"
+
+# 8. Push T&D
+git push origin "t&d"
+
+# ==========================================================
+# TEST T&D
+# ==========================================================
+# Review and test the T&D deployment before merging to main.
+
+
+# ==========================================================
+# MERGE T&D -> MAIN
+# ==========================================================
+
+# 9. Switch to main
+git checkout main
+
+# 10. Get latest main
+git pull origin main
+
+# 11. Merge T&D
+git merge "t&d"
+
+# 12. Push main
+git push origin main
+
+# ==========================================================
+# VERIFY
+# ==========================================================
+
+git status
+git branch
+git log --oneline -5
+
 ## Documentation policy
 
 For long-form project setup, environment guidance, and troubleshooting, the detailed guide stays in the project folder README. The repository root README is kept short and focused so GitHub remains clean and easy to scan.
