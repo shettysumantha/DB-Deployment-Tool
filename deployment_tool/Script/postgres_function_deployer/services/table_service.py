@@ -1,7 +1,11 @@
 import re
+import logging
+from time import perf_counter
+
 from .db_service import connection
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+LOGGER = logging.getLogger(__name__)
 TABLE_QUERY = """
 SELECT c.oid::bigint, n.nspname, c.relname, c.relispartition,
        pg_get_partkeydef(c.oid),
@@ -10,6 +14,49 @@ FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relkind = 'r'
   AND (c.relname ILIKE %s OR c.relname = ANY(%s::text[]))
 ORDER BY c.relname
+"""
+TABLE_COLUMNS_QUERY = """
+SELECT a.attrelid::bigint, a.attname, format_type(a.atttypid, a.atttypmod),
+             a.attnotnull, pg_get_expr(ad.adbin, ad.adrelid), a.attidentity,
+             a.attgenerated, a.attnum
+FROM pg_attribute a
+LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+WHERE a.attrelid = ANY(%s::bigint[]) AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY a.attrelid, a.attnum
+"""
+TABLE_SEQUENCES_QUERY = """
+SELECT a.attrelid::bigint, a.attname, sn.nspname, sc.relname,
+             format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement,
+             s.seqmin, s.seqmax, s.seqcache, s.seqcycle
+FROM pg_attribute a
+JOIN pg_class c ON c.oid = a.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_class sc ON sc.oid = to_regclass(
+        pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname)
+)
+JOIN pg_namespace sn ON sn.oid = sc.relnamespace
+JOIN pg_sequence s ON s.seqrelid = sc.oid
+WHERE a.attrelid = ANY(%s::bigint[]) AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY a.attrelid, a.attnum
+"""
+TABLE_CONSTRAINTS_QUERY = """
+SELECT conrelid::bigint, conname, contype, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = ANY(%s::bigint[])
+ORDER BY conrelid, conname
+"""
+TABLE_INDEXES_QUERY = """
+SELECT i.indrelid::bigint, i.indexrelid::regclass::text, i.indisunique,
+             i.indisprimary, pg_get_indexdef(i.indexrelid)
+FROM pg_index i
+WHERE i.indrelid = ANY(%s::bigint[])
+    AND NOT i.indisprimary
+    AND NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint constraint_record
+            WHERE constraint_record.conindid = i.indexrelid
+    )
+ORDER BY i.indrelid, i.indexrelid::regclass::text
 """
 TABLE_NAMES_QUERY = """
 SELECT n.nspname, c.relname
@@ -42,78 +89,14 @@ def fetch_table_names(config, pattern='%', search=''):
                     for schema, name in cursor.fetchall()]
 
 
-def _record(cursor, oid, schema, name, is_partition, partition_key, description):
-    cursor.execute("""
-        SELECT attname, format_type(atttypid, atttypmod), attnotnull,
-               pg_get_expr(ad.adbin, ad.adrelid), attidentity, attgenerated,
-               attnum
-        FROM pg_attribute a LEFT JOIN pg_attrdef ad
-          ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-        WHERE a.attrelid = %s AND a.attnum > 0 AND NOT a.attisdropped
-        ORDER BY a.attnum
-    """, (oid,))
-    columns = [{
-        'name': row[0], 'data_type': row[1], 'nullable': not row[2],
-        'default': row[3], 'identity': row[4], 'generated': row[5], 'order': row[6]
-    } for row in cursor.fetchall()]
-    sequences = []
-    for column in columns:
-        cursor.execute("SELECT pg_get_serial_sequence(%s, %s)", (f'{schema}.{name}', column['name']))
-        sequence_key = cursor.fetchone()[0]
-        if not sequence_key:
-            continue
-        sequence_schema, sequence_name = sequence_key.split('.', 1)
-        sequence_schema = sequence_schema.strip('"')
-        sequence_name = sequence_name.strip('"')
-        cursor.execute("""
-            SELECT format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement,
-                   s.seqmin, s.seqmax, s.seqcache, s.seqcycle
-            FROM pg_sequence s
-            JOIN pg_class c ON c.oid = s.seqrelid
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = %s AND c.relname = %s
-        """, (sequence_schema, sequence_name))
-        sequence = cursor.fetchone()
-        if sequence:
-            sequences.append({
-                'schema': sequence_schema,
-                'name': sequence_name,
-                'data_type': sequence[0],
-                'start': sequence[1],
-                'increment': sequence[2],
-                'min': sequence[3],
-                'max': sequence[4],
-                'cache': sequence[5],
-                'cycle': sequence[6],
-                'column': column['name'],
-            })
-    cursor.execute("""
-        SELECT conname, contype, pg_get_constraintdef(oid)
-        FROM pg_constraint WHERE conrelid = %s
-        ORDER BY conname
-    """, (oid,))
-    constraints = [{'name': row[0], 'type': row[1], 'definition': row[2]} for row in cursor.fetchall()]
-    cursor.execute("""
-        SELECT i.indexrelid::regclass::text, i.indisunique, i.indisprimary,
-               pg_get_indexdef(i.indexrelid)
-        FROM pg_index i
-        WHERE i.indrelid = %s
-          AND NOT i.indisprimary
-          AND NOT EXISTS (
-              SELECT 1
-              FROM pg_constraint constraint_record
-              WHERE constraint_record.conindid = i.indexrelid
-          )
-        ORDER BY i.indexrelid::regclass::text
-    """, (oid,))
-    indexes = [{'name': row[0].split('.')[-1].strip('"'), 'unique': row[1],
-                'primary': row[2], 'definition': row[3]} for row in cursor.fetchall()]
-    definition = _create_definition(schema, name, columns, constraints, indexes, partition_key, sequences)
+def _record(table, columns, sequences, constraints, indexes):
+    schema, name = table['schema'], table['name']
+    definition = _create_definition(schema, name, columns, constraints, indexes, table['partition_key'], sequences)
     return {'key': table_key(schema, name), 'schema': schema, 'name': name,
         'columns': columns, 'constraints': constraints, 'indexes': indexes,
         'sequences': sequences,
-        'is_partition': bool(is_partition), 'partition_key': partition_key,
-        'description': description or '', 'definition': definition}
+        'is_partition': table['is_partition'], 'partition_key': table['partition_key'],
+        'description': table['description'], 'definition': definition}
 
 
 def _create_definition(schema, name, columns, constraints, indexes, partition_key, sequences=None):
@@ -142,12 +125,59 @@ def _create_definition(schema, name, columns, constraints, indexes, partition_ke
     return sql + ''.join(f'{index["definition"]};\n' for index in indexes)
 
 
-def fetch_selected(config, names, pattern='%'):
+def fetch_selected(config, names, pattern='%', metrics=None):
     names = _validate_names(names)
+    started = perf_counter()
     with connection(config) as conn:
         with conn.cursor() as cursor:
             cursor.execute(TABLE_QUERY, (pattern, names))
-            records = [_record(cursor, *row) for row in cursor.fetchall()]
+            table_rows = cursor.fetchall()
+            table_ids = [row[0] for row in table_rows]
+            tables = {
+                row[0]: {
+                    'oid': row[0], 'schema': row[1], 'name': row[2],
+                    'is_partition': bool(row[3]), 'partition_key': row[4],
+                    'description': row[5] or '',
+                }
+                for row in table_rows
+            }
+            cursor.execute(TABLE_COLUMNS_QUERY, (table_ids,))
+            columns = {}
+            for row in cursor.fetchall():
+                columns.setdefault(row[0], []).append({
+                    'name': row[1], 'data_type': row[2], 'nullable': not row[3],
+                    'default': row[4], 'identity': row[5], 'generated': row[6], 'order': row[7]
+                })
+            cursor.execute(TABLE_SEQUENCES_QUERY, (table_ids,))
+            sequences = {}
+            for row in cursor.fetchall():
+                sequences.setdefault(row[0], []).append({
+                    'schema': row[2], 'name': row[3], 'data_type': row[4],
+                    'start': row[5], 'increment': row[6], 'min': row[7],
+                    'max': row[8], 'cache': row[9], 'cycle': row[10], 'column': row[1],
+                })
+            cursor.execute(TABLE_CONSTRAINTS_QUERY, (table_ids,))
+            constraints = {}
+            for row in cursor.fetchall():
+                constraints.setdefault(row[0], []).append({
+                    'name': row[1], 'type': row[2], 'definition': row[3]
+                })
+            cursor.execute(TABLE_INDEXES_QUERY, (table_ids,))
+            indexes = {}
+            for row in cursor.fetchall():
+                indexes.setdefault(row[0], []).append({
+                    'name': row[1].split('.')[-1].strip('"'), 'unique': row[2],
+                    'primary': row[3], 'definition': row[4]
+                })
+    records = [
+        _record(table, columns.get(oid, []), sequences.get(oid, []),
+                constraints.get(oid, []), indexes.get(oid, []))
+        for oid, table in tables.items()
+    ]
+    elapsed = perf_counter() - started
+    if metrics is not None:
+        metrics.update({'queries': 5, 'tables': len(records), 'elapsed': elapsed})
+    LOGGER.info('table metadata fetched: tables=%d queries=%d elapsed=%.3fs', len(records), 5, elapsed)
     return {record['key']: record for record in records}
 
 
@@ -162,8 +192,10 @@ def _signature(record):
 
 
 def compare_tables(td_config, live_config, names, include_live_only=False, pattern='%'):
-    source = fetch_selected(td_config, names, pattern)
-    live = fetch_selected(live_config, names if not include_live_only else names, pattern)
+    started = perf_counter()
+    source_metrics, live_metrics = {}, {}
+    source = fetch_selected(td_config, names, pattern, source_metrics)
+    live = fetch_selected(live_config, names if not include_live_only else names, pattern, live_metrics)
     results = []
     for key in sorted(set(source) | set(live)):
         source_record, live_record = source.get(key), live.get(key)
@@ -179,6 +211,12 @@ def compare_tables(td_config, live_config, names, include_live_only=False, patte
                         'schema': (source_record or live_record)['schema'], 'status': status,
                         'changes': changes, 'source': source_record, 'live': live_record,
                         'destructive': any(item.startswith(('REMOVED', 'DROP')) for item in changes)})
+    LOGGER.info(
+        'table comparison complete: source_queries=%d live_queries=%d tables=%d compare_elapsed=%.3fs total_elapsed=%.3fs',
+        source_metrics.get('queries', 5), live_metrics.get('queries', 5), len(results),
+        perf_counter() - started - source_metrics.get('elapsed', 0) - live_metrics.get('elapsed', 0),
+        perf_counter() - started,
+    )
     return results
 
 
