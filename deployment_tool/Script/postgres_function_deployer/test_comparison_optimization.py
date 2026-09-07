@@ -8,20 +8,17 @@ class FakeCursor:
     def __init__(self):
         self.executed = []
         self.rows = {
-            table_service.TABLE_QUERY: [
-                (101, "public", "orders", False, None, None),
-            ],
-            table_service.TABLE_COLUMNS_QUERY: [
-                (101, "id", "integer", True, "nextval('public.orders_id_seq'::regclass)", "", "", 1),
-            ],
-            table_service.TABLE_SEQUENCES_QUERY: [
-                (101, "id", "public", "orders_id_seq", "integer", 1, 1, 1, 2147483647, 1, False),
-            ],
-            table_service.TABLE_CONSTRAINTS_QUERY: [
-                (101, "orders_pkey", "p", "PRIMARY KEY (id)"),
-            ],
-            table_service.TABLE_INDEXES_QUERY: [
-                (101, "public.orders_name_idx", False, False, 'CREATE INDEX orders_name_idx ON public.orders USING btree (name)'),
+            table_service.TABLE_METADATA_QUERY: [
+                (101, "public", "orders", False, None, None,
+                 [{"name": "id", "data_type": "integer", "nullable": False,
+                   "default": "nextval('public.orders_id_seq'::regclass)",
+                   "identity": "", "generated": "", "order": 1}],
+                 [{"schema": "public", "name": "orders_id_seq", "data_type": "integer",
+                   "start": 1, "increment": 1, "min": 1, "max": 2147483647,
+                   "cache": 1, "cycle": False, "column": "id"}],
+                 [{"name": "orders_pkey", "type": "p", "definition": "PRIMARY KEY (id)"}],
+                 [{"name": "public.orders_name_idx", "unique": False, "primary": False,
+                   "definition": "CREATE INDEX orders_name_idx ON public.orders USING btree (name)"}]),
             ],
         }
 
@@ -78,11 +75,16 @@ class ComparisonOptimizationTests(unittest.TestCase):
         with patch("services.table_service.connection", return_value=FakeConnection(cursor)):
             records = table_service.fetch_selected({}, ["orders"], metrics=metrics)
 
-        self.assertEqual(metrics["queries"], 5)
-        self.assertEqual(len(cursor.executed), 5)
+        self.assertEqual(metrics["queries"], 1)
+        self.assertEqual(len(cursor.executed), 1)
         self.assertEqual(records["public.orders"]["sequences"][0]["name"], "orders_id_seq")
         self.assertEqual(records["public.orders"]["constraints"][0]["name"], "orders_pkey")
         self.assertEqual(records["public.orders"]["indexes"][0]["name"], "orders_name_idx")
+
+    def test_sequence_metadata_uses_catalog_dependencies(self):
+        self.assertIn("pg_depend", table_service.TABLE_METADATA_QUERY)
+        self.assertNotIn("pg_get_serial_sequence", table_service.TABLE_METADATA_QUERY)
+        self.assertNotIn("to_regclass", table_service.TABLE_METADATA_QUERY)
 
     def test_table_status_rules_are_unchanged(self):
         source = {

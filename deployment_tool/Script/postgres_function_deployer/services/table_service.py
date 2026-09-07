@@ -15,48 +15,77 @@ WHERE n.nspname = 'public' AND c.relkind = 'r'
   AND (c.relname ILIKE %s OR c.relname = ANY(%s::text[]))
 ORDER BY c.relname
 """
-TABLE_COLUMNS_QUERY = """
-SELECT a.attrelid::bigint, a.attname, format_type(a.atttypid, a.atttypmod),
-             a.attnotnull, pg_get_expr(ad.adbin, ad.adrelid), a.attidentity,
-             a.attgenerated, a.attnum
-FROM pg_attribute a
-LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-WHERE a.attrelid = ANY(%s::bigint[]) AND a.attnum > 0 AND NOT a.attisdropped
-ORDER BY a.attrelid, a.attnum
-"""
-TABLE_SEQUENCES_QUERY = """
-SELECT a.attrelid::bigint, a.attname, sn.nspname, sc.relname,
-             format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement,
-             s.seqmin, s.seqmax, s.seqcache, s.seqcycle
-FROM pg_attribute a
-JOIN pg_class c ON c.oid = a.attrelid
-JOIN pg_namespace n ON n.oid = c.relnamespace
-JOIN pg_class sc ON sc.oid = to_regclass(
-        pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname)
+TABLE_METADATA_QUERY = """
+WITH selected_tables AS (
+    SELECT c.oid::bigint AS oid, n.nspname AS schema_name, c.relname AS table_name,
+           c.relispartition AS is_partition, pg_get_partkeydef(c.oid) AS partition_key,
+           obj_description(c.oid, 'pg_class') AS description
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'r'
+      AND (c.relname ILIKE %s OR c.relname = ANY(%s::text[]))
+), table_columns AS (
+    SELECT a.attrelid::bigint AS oid,
+           jsonb_agg(jsonb_build_object(
+               'name', a.attname, 'data_type', format_type(a.atttypid, a.atttypmod),
+               'nullable', NOT a.attnotnull, 'default', pg_get_expr(ad.adbin, ad.adrelid),
+               'identity', a.attidentity, 'generated', a.attgenerated, 'order', a.attnum
+           ) ORDER BY a.attnum) AS items
+    FROM pg_attribute a LEFT JOIN pg_attrdef ad
+      ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+    WHERE a.attrelid IN (SELECT oid FROM selected_tables)
+      AND a.attnum > 0 AND NOT a.attisdropped
+    GROUP BY a.attrelid
+), table_sequences AS (
+    SELECT a.attrelid::bigint AS oid,
+           jsonb_agg(jsonb_build_object(
+               'schema', sn.nspname, 'name', sc.relname,
+               'data_type', format_type(s.seqtypid, NULL), 'start', s.seqstart,
+               'increment', s.seqincrement, 'min', s.seqmin, 'max', s.seqmax,
+               'cache', s.seqcache, 'cycle', s.seqcycle, 'column', a.attname
+           ) ORDER BY a.attnum) AS items
+    FROM pg_attribute a
+    JOIN pg_depend d ON d.refobjid = a.attrelid AND d.refobjsubid = a.attnum
+                    AND d.classid = 'pg_class'::regclass
+                    AND d.refclassid = 'pg_class'::regclass
+                    AND d.deptype IN ('a', 'i')
+    JOIN pg_class sc ON sc.oid = d.objid AND sc.relkind = 'S'
+    JOIN pg_namespace sn ON sn.oid = sc.relnamespace
+    JOIN pg_sequence s ON s.seqrelid = sc.oid
+    WHERE a.attrelid IN (SELECT oid FROM selected_tables)
+      AND a.attnum > 0 AND NOT a.attisdropped
+    GROUP BY a.attrelid
+), table_constraints AS (
+    SELECT conrelid::bigint AS oid,
+           jsonb_agg(jsonb_build_object(
+               'name', conname, 'type', contype, 'definition', pg_get_constraintdef(oid)
+           ) ORDER BY conname) AS items
+    FROM pg_constraint
+    WHERE conrelid IN (SELECT oid FROM selected_tables)
+    GROUP BY conrelid
+), table_indexes AS (
+    SELECT i.indrelid::bigint AS oid,
+           jsonb_agg(jsonb_build_object(
+               'name', i.indexrelid::regclass::text, 'unique', i.indisunique,
+               'primary', i.indisprimary, 'definition', pg_get_indexdef(i.indexrelid)
+           ) ORDER BY i.indexrelid::regclass::text) AS items
+    FROM pg_index i
+    WHERE i.indrelid IN (SELECT oid FROM selected_tables)
+      AND NOT i.indisprimary
+      AND NOT EXISTS (
+          SELECT 1 FROM pg_constraint constraint_record
+          WHERE constraint_record.conindid = i.indexrelid
+      )
+    GROUP BY i.indrelid
 )
-JOIN pg_namespace sn ON sn.oid = sc.relnamespace
-JOIN pg_sequence s ON s.seqrelid = sc.oid
-WHERE a.attrelid = ANY(%s::bigint[]) AND a.attnum > 0 AND NOT a.attisdropped
-ORDER BY a.attrelid, a.attnum
-"""
-TABLE_CONSTRAINTS_QUERY = """
-SELECT conrelid::bigint, conname, contype, pg_get_constraintdef(oid)
-FROM pg_constraint
-WHERE conrelid = ANY(%s::bigint[])
-ORDER BY conrelid, conname
-"""
-TABLE_INDEXES_QUERY = """
-SELECT i.indrelid::bigint, i.indexrelid::regclass::text, i.indisunique,
-             i.indisprimary, pg_get_indexdef(i.indexrelid)
-FROM pg_index i
-WHERE i.indrelid = ANY(%s::bigint[])
-    AND NOT i.indisprimary
-    AND NOT EXISTS (
-            SELECT 1
-            FROM pg_constraint constraint_record
-            WHERE constraint_record.conindid = i.indexrelid
-    )
-ORDER BY i.indrelid, i.indexrelid::regclass::text
+SELECT t.oid, t.schema_name, t.table_name, t.is_partition, t.partition_key, t.description,
+       COALESCE(c.items, '[]'::jsonb), COALESCE(s.items, '[]'::jsonb),
+       COALESCE(k.items, '[]'::jsonb), COALESCE(i.items, '[]'::jsonb)
+FROM selected_tables t
+LEFT JOIN table_columns c ON c.oid = t.oid
+LEFT JOIN table_sequences s ON s.oid = t.oid
+LEFT JOIN table_constraints k ON k.oid = t.oid
+LEFT JOIN table_indexes i ON i.oid = t.oid
+ORDER BY t.table_name
 """
 TABLE_NAMES_QUERY = """
 SELECT n.nspname, c.relname
@@ -130,54 +159,21 @@ def fetch_selected(config, names, pattern='%', metrics=None):
     started = perf_counter()
     with connection(config) as conn:
         with conn.cursor() as cursor:
-            cursor.execute(TABLE_QUERY, (pattern, names))
-            table_rows = cursor.fetchall()
-            table_ids = [row[0] for row in table_rows]
-            tables = {
-                row[0]: {
-                    'oid': row[0], 'schema': row[1], 'name': row[2],
-                    'is_partition': bool(row[3]), 'partition_key': row[4],
-                    'description': row[5] or '',
-                }
-                for row in table_rows
-            }
-            cursor.execute(TABLE_COLUMNS_QUERY, (table_ids,))
-            columns = {}
-            for row in cursor.fetchall():
-                columns.setdefault(row[0], []).append({
-                    'name': row[1], 'data_type': row[2], 'nullable': not row[3],
-                    'default': row[4], 'identity': row[5], 'generated': row[6], 'order': row[7]
-                })
-            cursor.execute(TABLE_SEQUENCES_QUERY, (table_ids,))
-            sequences = {}
-            for row in cursor.fetchall():
-                sequences.setdefault(row[0], []).append({
-                    'schema': row[2], 'name': row[3], 'data_type': row[4],
-                    'start': row[5], 'increment': row[6], 'min': row[7],
-                    'max': row[8], 'cache': row[9], 'cycle': row[10], 'column': row[1],
-                })
-            cursor.execute(TABLE_CONSTRAINTS_QUERY, (table_ids,))
-            constraints = {}
-            for row in cursor.fetchall():
-                constraints.setdefault(row[0], []).append({
-                    'name': row[1], 'type': row[2], 'definition': row[3]
-                })
-            cursor.execute(TABLE_INDEXES_QUERY, (table_ids,))
-            indexes = {}
-            for row in cursor.fetchall():
-                indexes.setdefault(row[0], []).append({
-                    'name': row[1].split('.')[-1].strip('"'), 'unique': row[2],
-                    'primary': row[3], 'definition': row[4]
-                })
-    records = [
-        _record(table, columns.get(oid, []), sequences.get(oid, []),
-                constraints.get(oid, []), indexes.get(oid, []))
-        for oid, table in tables.items()
-    ]
+            cursor.execute(TABLE_METADATA_QUERY, (pattern, names))
+            rows = cursor.fetchall()
+    records = []
+    for row in rows:
+        table = {
+            'oid': row[0], 'schema': row[1], 'name': row[2],
+            'is_partition': bool(row[3]), 'partition_key': row[4],
+            'description': row[5] or '',
+        }
+        indexes = [dict(item, name=item['name'].split('.')[-1].strip('"')) for item in row[9]]
+        records.append(_record(table, row[6], row[7], row[8], indexes))
     elapsed = perf_counter() - started
     if metrics is not None:
-        metrics.update({'queries': 5, 'tables': len(records), 'elapsed': elapsed})
-    LOGGER.info('table metadata fetched: tables=%d queries=%d elapsed=%.3fs', len(records), 5, elapsed)
+        metrics.update({'queries': 1, 'tables': len(records), 'elapsed': elapsed})
+    LOGGER.info('table metadata fetched: tables=%d queries=%d elapsed=%.3fs', len(records), 1, elapsed)
     return {record['key']: record for record in records}
 
 
@@ -213,7 +209,7 @@ def compare_tables(td_config, live_config, names, include_live_only=False, patte
                         'destructive': any(item.startswith(('REMOVED', 'DROP')) for item in changes)})
     LOGGER.info(
         'table comparison complete: source_queries=%d live_queries=%d tables=%d compare_elapsed=%.3fs total_elapsed=%.3fs',
-        source_metrics.get('queries', 5), live_metrics.get('queries', 5), len(results),
+        source_metrics.get('queries', 1), live_metrics.get('queries', 1), len(results),
         perf_counter() - started - source_metrics.get('elapsed', 0) - live_metrics.get('elapsed', 0),
         perf_counter() - started,
     )
