@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in | Database Operations</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=auth1">
+</head>
+<body class="auth-page">
+  <main class="login-card">
+    <div class="brand-mark">PG</div>
+    <p class="eyebrow accent">DATABASE OPERATIONS</p>
+    <h1>Function Deployment Manager</h1>
+    <p class="login-copy">Sign in to review and move database changes.</p>
+    {% if error %}<div class="notice auth-error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('login_submit') }}">
+      <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+      <label>Username or email<input name="identifier" autocomplete="username" required autofocus></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn btn-warning w-100" type="submit">Login</button>
+    </form>
+  </main>
+</body>
+</html>

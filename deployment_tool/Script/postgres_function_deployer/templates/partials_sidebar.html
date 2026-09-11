@@ -1,0 +1,21 @@
+{% macro render_menu(menu) %}
+  {% if menu.children %}
+    <div class="sidebar-group">
+      <button class="sidebar-link sidebar-parent" type="button" aria-expanded="true" onclick="this.parentElement.classList.toggle('is-collapsed')">
+        <span class="sidebar-icon">{{ menu.icon or '◆' }}</span><span>{{ menu.menu_name }}</span><span class="sidebar-chevron">⌄</span>
+      </button>
+      <div class="sidebar-children">{% for child in menu.children %}{{ render_menu(child) }}{% endfor %}</div>
+    </div>
+  {% elif menu.menu_type == 'EXTERNAL' %}
+    <a class="sidebar-link" href="{{ menu.external_url }}"{% if menu.open_in_new_tab %} target="_blank" rel="noopener noreferrer"{% endif %}>
+      <span class="sidebar-icon">{{ menu.icon or '↗' }}</span><span>{{ menu.menu_name }}</span><span class="sidebar-external">↗</span>
+    </a>
+  {% else %}
+    <a class="sidebar-link" href="{{ menu.route_path or '#' }}"><span class="sidebar-icon">{{ menu.icon or '◆' }}</span><span>{{ menu.menu_name }}</span></a>
+  {% endif %}
+{% endmacro %}
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand"><span class="brand-mark">PG</span><div><strong>DATABASE</strong><small>OPERATIONS</small></div></div>
+  <nav aria-label="Application navigation">{% for menu in sidebar_menus %}{{ render_menu(menu) }}{% endfor %}</nav>
+  <div class="sidebar-user"><span>{{ session.get('full_name') or session.get('username') }}</span><small>{{ session.get('roles', [])|join(' / ') }}</small><form method="post" action="{{ url_for('logout_route') }}"><button type="submit">Sign out</button></form></div>
+</aside>

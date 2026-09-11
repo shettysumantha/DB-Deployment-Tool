@@ -1,7 +1,10 @@
 import re
+import logging
+from time import perf_counter
 
 from .function_service import fetch_matching_keys
 
+LOGGER = logging.getLogger(__name__)
 
 def normalize_definition(definition):
     if not definition:
@@ -16,8 +19,10 @@ def normalize_definition(definition):
 
 def compare_functions(td_config, live_config, expected_names):
     from .function_service import fetch_selected
-    source = fetch_selected(td_config, expected_names)
-    live = fetch_selected(live_config, expected_names)
+    started = perf_counter()
+    source_metrics, live_metrics = {}, {}
+    source = fetch_selected(td_config, expected_names, source_metrics)
+    live = fetch_selected(live_config, expected_names, live_metrics)
     results = []
     for key in sorted(set(source) | set(live)):
         source_record = source.get(key)
@@ -38,4 +43,10 @@ def compare_functions(td_config, live_config, expected_names):
             "source": source_record,
             "live": live_record,
         })
+    LOGGER.info(
+        "function comparison complete: source_queries=%d live_queries=%d compare_elapsed=%.3fs total_elapsed=%.3fs",
+        source_metrics.get("queries", 1), live_metrics.get("queries", 1),
+        perf_counter() - started - source_metrics.get("elapsed", 0) - live_metrics.get("elapsed", 0),
+        perf_counter() - started,
+    )
     return results

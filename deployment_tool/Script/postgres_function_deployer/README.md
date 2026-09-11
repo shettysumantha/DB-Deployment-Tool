@@ -87,6 +87,15 @@ APP_DATABASE_URL=
 
 `APP_DATABASE_URL` is the PostgreSQL database used for saved connection metadata and `tbl_deployment_backup_registry`. When it is set, the backup list and backup metadata are stored there. If it is empty, the registry falls back to the connected Live database for backward compatibility.
 
+Authentication and the database-driven sidebar also use `APP_DATABASE_URL`. Run `database_security.sql` once against that database, then create the first administrator interactively:
+
+```powershell
+.\.venv\Scripts\python.exe init_security.py
+.\.venv\Scripts\python.exe create_admin.py
+```
+
+The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
+
 ### Database variables
 
 The current workflow also supports saving database metadata through the application's SQLite credential registry. These variables document the established T&D and Live configuration names:
