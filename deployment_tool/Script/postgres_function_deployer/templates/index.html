@@ -16,7 +16,8 @@
     />
     <link rel="stylesheet" href="/static/css/style.css?v=32b43fc" />
   </head>
-  <body>
+  <body class="app-page">
+    {% include 'partials_sidebar.html' %}
     <header class="topbar">
       <div
         class="container-fluid page-shell d-flex align-items-center justify-content-between"
@@ -36,7 +37,7 @@
         <div class="live-indicator"><span></span> LOCAL CONTROL PLANE</div>
       </div>
     </header>
-    <main class="container-fluid page-shell py-4">
+    <main class="main-content container-fluid page-shell py-4">
       <section
         class="intro d-flex flex-wrap align-items-end justify-content-between gap-3 mb-4"
       >
