@@ -1,5 +1,9 @@
+import logging
+from time import perf_counter
+
 from .db_service import connection
 
+LOGGER = logging.getLogger(__name__)
 
 FUNCTION_QUERY = """
 SELECT
@@ -86,8 +90,9 @@ def _record(row):
     }
 
 
-def fetch_selected(config, expected_names):
+def fetch_selected(config, expected_names, metrics=None):
     expected_names = expected_names or [""]
+    started = perf_counter()
 
     with connection(config) as conn:
         with conn.cursor() as cursor:
@@ -96,6 +101,11 @@ def fetch_selected(config, expected_names):
                 (expected_names,)
             )
             records = [_record(row) for row in cursor.fetchall()]
+
+    elapsed = perf_counter() - started
+    if metrics is not None:
+        metrics.update({"queries": 1, "functions": len(records), "elapsed": elapsed})
+    LOGGER.info("function metadata fetched: functions=%d queries=%d elapsed=%.3fs", len(records), 1, elapsed)
 
     return {
         record["key"]: record

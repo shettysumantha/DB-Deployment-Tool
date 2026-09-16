@@ -1,11 +1,11 @@
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_file, send_from_directory, session
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
 
-from config import DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PORT, SECRET_KEY, TABLE_NAME_PATTERN
+from config import DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
 from services.comparison_service import compare_functions
 from services.db_service import clean_config, safe_error, test_connection
 from services.deployment_service import deploy_records
@@ -17,13 +17,176 @@ from services.registry_service import application_database_configured, ensure_re
 from services.sql_generator import generate_script
 from services.credential_service import connection_config, get_database, list_databases, save_database, update_database
 from services.notification_service import send_deployment_notification
+from services.security_service import authenticate, create_user, delete_menu, has_permission, list_menus, list_roles, list_users, logout, record_failed_login, save_menu, save_permissions, save_role, user_menus
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
 app = Flask(__name__)
 app.config.update(SECRET_KEY=SECRET_KEY, MAX_CONTENT_LENGTH=2 * 1024 * 1024)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", PERMANENT_SESSION_LIFETIME=timedelta(minutes=SESSION_TIMEOUT_MINUTES))
 vault = {}
 app.extensions["credential_vault"] = vault
+
+
+@app.errorhandler(403)
+def forbidden(_error):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Access denied."}), 403
+    return render_template("error.html", code=403, title="Access Denied", message="You do not have permission to access this page."), 403
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return render_template("error.html", code=404, title="Page Not Found", message="The requested page could not be found."), 404
+
+
+@app.before_request
+def enforce_login():
+    if request.endpoint in {"login", "health", "static"} or request.path.startswith("/static/"):
+        return None
+    if not session.get("user_id"):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required."}), 401
+        return redirect(url_for("login", next=request.full_path))
+    session.permanent = True
+    return None
+
+
+@app.context_processor
+def security_context():
+    return {"sidebar_menus": user_menus(session["user_id"]) if session.get("user_id") else []}
+
+
+@app.get("/login")
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
+@app.post("/login")
+def login_submit():
+    identifier = (request.form.get("identifier") or "").strip()
+    password = request.form.get("password") or ""
+    try:
+        user = authenticate(identifier, password)
+    except Exception as exc:
+        return render_template("login.html", error=str(exc)), 503
+    if not user:
+        record_failed_login(identifier)
+        return render_template("login.html", error="Invalid username or password."), 401
+    session.clear()
+    session.permanent = True
+    session.update({"user_id": user["user_id"], "username": user["username"], "full_name": user["full_name"], "roles": user["roles"]})
+    next_path = request.form.get("next", "")
+    return redirect(next_path if next_path.startswith("/") and not next_path.startswith("//") else url_for("index"))
+
+
+@app.post("/logout")
+def logout_route():
+    if session.get("user_id"):
+        try:
+            logout(session["user_id"], session.get("username", ""))
+        except Exception:
+            pass
+    session.clear()
+    return redirect(url_for("login"))
+
+
+@app.get("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+
+def require_permission(menu_code, permission="can_view"):
+    if not has_permission(session["user_id"], menu_code, permission):
+        abort(403)
+
+
+@app.get("/api/menus")
+def menus_api():
+    return jsonify({"success": True, "menus": user_menus(session["user_id"])})
+
+
+@app.get("/admin/menus")
+def admin_menus():
+    require_permission("MENU_MANAGEMENT")
+    return render_template("admin_menus.html", menus=list_menus())
+
+
+@app.get("/api/admin/menus")
+def admin_menus_api():
+    require_permission("MENU_MANAGEMENT")
+    return jsonify({"menus": list_menus()})
+
+
+@app.post("/api/admin/menus")
+def admin_menu_create():
+    require_permission("MENU_MANAGEMENT", "can_create")
+    try:
+        return jsonify({"menu_id": save_menu(request.get_json(silent=True) or {})}), 201
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.put("/api/admin/menus/<int:menu_id>")
+def admin_menu_update(menu_id):
+    require_permission("MENU_MANAGEMENT", "can_edit")
+    try:
+        return jsonify({"menu_id": save_menu(request.get_json(silent=True) or {}, menu_id)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.delete("/api/admin/menus/<int:menu_id>")
+def admin_menu_delete(menu_id):
+    require_permission("MENU_MANAGEMENT", "can_delete")
+    delete_menu(menu_id)
+    return jsonify({"success": True})
+
+
+@app.get("/admin/users")
+def admin_users():
+    require_permission("USER_MANAGEMENT")
+    return jsonify({"users": list_users()})
+
+
+@app.post("/api/admin/users")
+def admin_user_create():
+    require_permission("USER_MANAGEMENT", "can_create")
+    try:
+        return jsonify({"user_id": create_user(request.get_json(silent=True) or {})}), 201
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.get("/admin/roles")
+def admin_roles():
+    require_permission("ROLE_MANAGEMENT")
+    return jsonify({"roles": list_roles()})
+
+
+@app.post("/api/admin/roles")
+def admin_role_create():
+    require_permission("ROLE_MANAGEMENT", "can_create")
+    try:
+        save_role(request.get_json(silent=True) or {})
+        return jsonify({"success": True}), 201
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.get("/admin/permissions")
+def admin_permissions():
+    require_permission("ROLE_PERMISSIONS")
+    return jsonify({"roles": list_roles(), "menus": list_menus()})
+
+
+@app.post("/api/admin/permissions/<int:role_id>")
+def admin_permissions_save(role_id):
+    require_permission("ROLE_PERMISSIONS", "can_edit")
+    save_permissions(role_id, request.get_json(silent=True) or [])
+    return jsonify({"success": True})
 
 
 def vault_for_session():
@@ -294,6 +457,7 @@ def generate_tables():
 @app.post("/api/tables/deploy")
 @app.post("/api/tables/deploy-selected")
 def deploy_table_route():
+    require_permission("DEPLOYMENT_MANAGER", "can_execute")
     try:
         payload = request.get_json(silent=True) or {}
         items = selected_tables()
@@ -368,6 +532,7 @@ def deploy_selected():
 
 
 def _deploy():
+    require_permission("DEPLOYMENT_MANAGER", "can_execute")
     try:
         state = vault_for_session()
         live = require_role("live")
