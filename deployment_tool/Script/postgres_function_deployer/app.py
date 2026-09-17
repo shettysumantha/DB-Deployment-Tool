@@ -40,62 +40,73 @@ def not_found(_error):
     return render_template("error.html", code=404, title="Page Not Found", message="The requested page could not be found."), 404
 
 
+# @app.before_request
+# def enforce_login():
+#     if request.endpoint in {"login", "health", "static"} or request.path.startswith("/static/"):
+#         return None
+#     if not session.get("user_id"):
+#         if request.path.startswith("/api/"):
+#             return jsonify({"error": "Authentication required."}), 401
+#         return redirect(url_for("login", next=request.full_path))
+#     session.permanent = True
+#     return None
+
 @app.before_request
 def enforce_login():
-    if request.endpoint in {"login", "health", "static"} or request.path.startswith("/static/"):
+
+    if request.path in ["/login", "/health"] or request.path.startswith("/static/"):
         return None
+
     if not session.get("user_id"):
         if request.path.startswith("/api/"):
             return jsonify({"error": "Authentication required."}), 401
         return redirect(url_for("login", next=request.full_path))
-    session.permanent = True
-    return None
 
+    session.permanent = True
 
 @app.context_processor
 def security_context():
-    return {"sidebar_menus": user_menus(session["user_id"]) if session.get("user_id") else []}
+    try:
+        menus = user_menus(session["user_id"]) if session.get("user_id") else []
+    except Exception:
+        menus = []
+
+    return {"sidebar_menus": menus}
 
 
 @app.get("/login")
 def login():
+
     if session.get("user_id"):
         return redirect(url_for("index"))
+
     return render_template("login.html")
 
 
 @app.post("/login")
 def login_submit():
-    print("LOGIN API CALLED")
-    identifier = (request.form.get("identifier") or "").strip()
-    password = request.form.get("password") or ""
-    print("Username:", identifier)
-    if identifier=='admin' and password == "Admin@123":
-        user = {
+
+    identifier = request.form.get("identifier", "").strip()
+    password = request.form.get("password", "")
+
+    if identifier == "admin" and password == "Admin@123":
+
+        session.clear()
+        session.permanent = True
+
+        session.update({
             "user_id": 1,
             "username": "admin",
             "full_name": "Administrator",
             "roles": ["admin"]
-        }
-    else:
-        return render_template(
-            "login.html",
-            error="Invalid username or password."
-        ), 401
-    # try:
-    #     user = authenticate(identifier, password)
-    # except Exception as exc:
-    #     return render_template("login.html", error=str(exc)), 503
-    # if not user:
-    #     record_failed_login(identifier)
-    #     return render_template("login.html", error="Invalid username or password."), 401
-    session.clear()
-    session.permanent = True
-    session.update({"user_id": user["user_id"], "username": user["username"], "full_name": user["full_name"], "roles": user["roles"]})
-    print("SESSION AFTER LOGIN:", dict(session))
-    next_path = request.form.get("next", "")
-    return redirect(next_path if next_path.startswith("/") and not next_path.startswith("//") else url_for("index"))
+        })
 
+        return redirect(url_for("index"))
+
+    return render_template(
+        "login.html",
+        error="Invalid username or password."
+    ), 401
 
 @app.post("/logout")
 def logout_route():
@@ -627,4 +638,8 @@ def download(filename):
 
 
 if __name__ == "__main__":
+    print("\n========== REGISTERED ROUTES ==========")
+    for rule in app.url_map.iter_rules():
+        print(rule, "->", rule.endpoint)
+    print("=======================================\n")
     app.run(host=HOST, port=PORT, debug=DEBUG)

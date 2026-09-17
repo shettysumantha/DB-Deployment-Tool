@@ -12,7 +12,7 @@
     <h1>Function Deployment Manager</h1>
     <p class="login-copy">Sign in to review and move database changes.</p>
     {% if error %}<div class="notice auth-error" role="alert">{{ error }}</div>{% endif %}
-    <form method="post" action="{{ url_for('login_submit') }}" autocomplete="off>
+    <form method="post" action="{{ url_for('login_submit') }}" autocomplete="off">
       <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
       <label>Username or email<input name="identifier" autocomplete="username" required autofocus></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
