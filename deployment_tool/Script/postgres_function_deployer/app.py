@@ -638,8 +638,4 @@ def download(filename):
 
 
 if __name__ == "__main__":
-    print("\n========== REGISTERED ROUTES ==========")
-    for rule in app.url_map.iter_rules():
-        print(rule, "->", rule.endpoint)
-    print("=======================================\n")
     app.run(host=HOST, port=PORT, debug=DEBUG)
