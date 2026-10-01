@@ -13,15 +13,16 @@
 }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 24px; border-bottom: 1px solid rgba(255,255,255,.12); }
 .sidebar-brand .sidebar-toggle { margin-left: auto; padding: 2px 8px; font-size: 20px; line-height: 1.2; }
-.sidebar-brand strong, .sidebar-brand small { display: block; font: 500 10px "DM Mono", monospace; letter-spacing: 2px; }
+.sidebar-brand strong, .sidebar-brand small { display: block; font: 500 9px "DM Mono", monospace; letter-spacing: 0.08em; }
 .sidebar-brand small { color: var(--cyan, #72e0d2); margin-top: 4px; }
 .sidebar nav { padding-top: 16px; overflow-y: auto; }
-.sidebar-link { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; color: #d8e3e1; text-decoration: none; background: transparent; border: 0; text-align: left; font: 500 13px "Space Grotesk", sans-serif; }
+.sidebar-link { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 10px 12px; color: #d8e3e1; text-decoration: none; background: transparent; border: 0; text-align: left; font: 500 13px/1.35 "Space Grotesk", sans-serif; letter-spacing: normal; word-spacing: normal; text-transform: none; white-space: normal; }
 .sidebar-link:hover, .sidebar-link:focus-visible { color: var(--cyan, #72e0d2); background: rgba(114,224,210,.1); }
 .sidebar-link.active { color: #fff; background: rgba(114,224,210,.13); box-shadow: inset 3px 0 var(--cyan, #72e0d2); }
 .sidebar-parent { cursor: pointer; }
-.sidebar-icon { width: 20px; color: var(--cyan, #72e0d2); font: 500 11px "DM Mono", monospace; text-align: center; }
-.sidebar-chevron, .sidebar-external { margin-left: auto; color: #9db4c7; }
+.sidebar-icon { display: inline-flex; flex: 0 0 20px; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--cyan, #72e0d2); font: 500 13px/1 "Space Grotesk", sans-serif; text-align: center; }
+.sidebar-label { flex: 1 1 auto; min-width: 0; overflow-wrap: normal; }
+.sidebar-chevron, .sidebar-external { flex: 0 0 auto; margin-left: auto; color: #9db4c7; }
 .sidebar-children { padding-left: 22px; }
 .sidebar-group.is-collapsed .sidebar-children { display: none; }
 .sidebar-user { margin-top: auto; padding: 14px 10px 0; border-top: 1px solid rgba(255,255,255,.12); font-size: 13px; }

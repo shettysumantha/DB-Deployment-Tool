@@ -250,17 +250,6 @@ def create_bootstrap_admin(data, configured_passkey):
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_advisory_xact_lock(94825731)")
                 cur.execute(
-                    """SELECT EXISTS (
-                           SELECT 1 FROM app_security.users u
-                           LEFT JOIN app_security.user_roles ur ON ur.user_id = u.user_id
-                           LEFT JOIN app_security.roles r ON r.role_id = ur.role_id
-                           WHERE u.is_admin OR r.role_name = 'ADMIN'
-                       )"""
-                )
-                if cur.fetchone()[0]:
-                    _audit(cur, None, "ADMIN_BOOTSTRAP_FAILED", details={"reason": "admin_already_exists"})
-                    raise ValueError("An Admin account already exists.")
-                cur.execute(
                     "INSERT INTO app_security.roles (role_name, role_description, is_active) VALUES ('ADMIN', 'Full application administration', TRUE) ON CONFLICT (role_name) DO UPDATE SET is_active = TRUE RETURNING role_id"
                 )
                 admin_role_id = cur.fetchone()[0]
@@ -423,30 +412,40 @@ def user_menus(user_id):
             access_configured, is_admin = cur.fetchone()
             if is_admin or not access_configured:
                 cur.execute(
-                    """SELECT DISTINCT m.menu_id, m.parent_menu_id, m.menu_name, m.menu_code,
-                              m.menu_type, m.route_path, m.external_url, m.icon, m.display_order,
-                              m.open_in_new_tab
-                       FROM app_security.menus m
-                       JOIN app_security.role_menu_permissions p ON p.menu_id = m.menu_id AND p.can_view
-                       JOIN app_security.user_roles ur ON ur.role_id = p.role_id
-                       JOIN app_security.roles r ON r.role_id = ur.role_id AND r.is_active
-                       WHERE ur.user_id = %s AND m.is_active
-                       ORDER BY COALESCE(m.parent_menu_id, 0), m.display_order, m.menu_name""",
+                    """SELECT menu_id, parent_menu_id, menu_name, menu_code,
+                              menu_type, route_path, external_url, icon, display_order,
+                              open_in_new_tab
+                       FROM (
+                           SELECT DISTINCT m.menu_id, m.parent_menu_id, m.menu_name, m.menu_code,
+                                  m.menu_type, m.route_path, m.external_url, m.icon, m.display_order,
+                                  m.open_in_new_tab
+                           FROM app_security.menus m
+                           JOIN app_security.role_menu_permissions p ON p.menu_id = m.menu_id AND p.can_view
+                           JOIN app_security.user_roles ur ON ur.role_id = p.role_id
+                           JOIN app_security.roles r ON r.role_id = ur.role_id AND r.is_active
+                           WHERE ur.user_id = %s AND m.is_active
+                       ) AS visible_menus
+                       ORDER BY COALESCE(parent_menu_id, 0), display_order, menu_name""",
                     (user_id,),
                 )
             else:
                 cur.execute(
-                    """SELECT DISTINCT m.menu_id, m.parent_menu_id, m.menu_name, m.menu_code,
-                              m.menu_type, m.route_path, m.external_url, m.icon, m.display_order,
-                              m.open_in_new_tab
-                       FROM app_security.menus m
-                       WHERE m.is_active AND (
-                           EXISTS (SELECT 1 FROM app_security.user_menu_access a
-                                   WHERE a.user_id = %s AND a.menu_id = m.menu_id)
-                           OR EXISTS (SELECT 1 FROM app_security.user_menu_access a
-                                      WHERE a.user_id = %s AND a.menu_id = m.parent_menu_id)
-                       )
-                       ORDER BY COALESCE(m.parent_menu_id, 0), m.display_order, m.menu_name""",
+                    """SELECT menu_id, parent_menu_id, menu_name, menu_code,
+                              menu_type, route_path, external_url, icon, display_order,
+                              open_in_new_tab
+                       FROM (
+                           SELECT DISTINCT m.menu_id, m.parent_menu_id, m.menu_name, m.menu_code,
+                                  m.menu_type, m.route_path, m.external_url, m.icon, m.display_order,
+                                  m.open_in_new_tab
+                           FROM app_security.menus m
+                           WHERE m.is_active AND (
+                               EXISTS (SELECT 1 FROM app_security.user_menu_access a
+                                       WHERE a.user_id = %s AND a.menu_id = m.menu_id)
+                               OR EXISTS (SELECT 1 FROM app_security.user_menu_access a
+                                          WHERE a.user_id = %s AND a.menu_id = m.parent_menu_id)
+                           )
+                       ) AS visible_menus
+                       ORDER BY COALESCE(parent_menu_id, 0), display_order, menu_name""",
                     (user_id, user_id),
                 )
             rows = [dict(zip(("menu_id", "parent_menu_id", "menu_name", "menu_code", "menu_type", "route_path", "external_url", "icon", "display_order", "open_in_new_tab"), row)) for row in cur.fetchall()]

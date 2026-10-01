@@ -1,4 +1,4 @@
-# PostgreSQL Function Deployment Manager
+# DBA Operations Platform
 
 A Flask dashboard for comparing and deploying PostgreSQL functions and tables between a T&D/test database and a Live database. Existing comparison, SQL generation, deployment, backup, registry, history, and notification workflows are preserved.
 

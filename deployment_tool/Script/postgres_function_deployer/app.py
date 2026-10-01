@@ -262,21 +262,10 @@ def admin_bootstrap():
         ), status
 
     try:
-        exists = admin_exists()
+        admin_exists()
     except Exception:
-        app.logger.exception("Admin registration database check failed")
-        return registration_response("Unable to connect to the application database.", status=503)
-    if exists:
-        if request.method == "POST":
-            try:
-                audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "admin_already_exists"})
-            except Exception:
-                app.logger.exception("Admin bootstrap failure audit write failed")
-        return registration_response(
-            "An Admin account already exists. Please use Admin Login.",
-            already_exists=True,
-            status=409 if request.method == "POST" else 200,
-        )
+        app.logger.exception("Admin registration database check failed for local authentication database")
+        return registration_response("Unable to connect to the local authentication database.", status=503)
     if request.method == "GET":
         return render_template("admin_register.html", values={}, field_errors={})
 

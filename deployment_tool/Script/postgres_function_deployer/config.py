@@ -31,7 +31,7 @@ SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
 PG_DEFAULTS = {
     "host": os.getenv("PG_HOST", "localhost"),
     "port": int(os.getenv("PG_PORT", "5432")),
-    "database": os.getenv("PG_DATABASE", "MyDatabase"),
+    "database": os.getenv("PG_DATABASE", "postgres"),
     "username": os.getenv("PG_USER", "postgres"),
 }
 PG_PASSWORD = os.getenv("PG_PASSWORD", "")
@@ -41,7 +41,7 @@ APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
 if not APP_DATABASE_URL:
     app_db_host = os.getenv("PG_HOST", "localhost").strip()
     app_db_port = int(os.getenv("PG_PORT", "5432"))
-    app_db_name = os.getenv("PG_DATABASE", "MyDatabase").strip()
+    app_db_name = os.getenv("PG_DATABASE", "postgres").strip()
     app_db_user = os.getenv("PG_USER", "postgres").strip()
     app_db_password = PG_PASSWORD
     app_db_sslmode = os.getenv("PG_SSLMODE", "prefer").strip()

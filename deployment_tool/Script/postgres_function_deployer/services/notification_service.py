@@ -137,11 +137,11 @@ def _send_email_with_smtp(subject, body, recipients, attachments=None):
 
 def send_password_reset_email(recipient, reset_url):
     body = (
-        "A password reset was requested for your Database Operations account.\n\n"
+        "A password reset was requested for your DBA Operations Platform account.\n\n"
         f"Use this one-time link within 20 minutes:\n{reset_url}\n\n"
         "If you did not request this, you can ignore this message."
     )
-    return _send_email_with_smtp("Database Operations password reset", body, [recipient])
+    return _send_email_with_smtp("DBA Operations Platform password reset", body, [recipient])
 
 
 def _send_mobile_notification(webhook, mobile_to, body):

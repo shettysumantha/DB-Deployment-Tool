@@ -112,9 +112,9 @@ ON CONFLICT (role_name) DO NOTHING;
 
 INSERT INTO app_security.menus (menu_name, menu_code, menu_type, route_path, icon, display_order) VALUES
 ('Dashboard', 'DASHBOARD', 'INTERNAL', '/dashboard', 'dashboard', 1),
-('Database Operations', 'DATABASE_OPERATIONS', 'GROUP', NULL, 'database', 2),
+('Database Operation Module', 'DATABASE_OPERATIONS', 'GROUP', NULL, 'database', 2),
 ('Deployment Manager', 'DEPLOYMENT_MANAGER', 'INTERNAL', '/deployment', 'deploy', 1),
-('Comparison Results', 'COMPARISON_RESULTS', 'INTERNAL', '/comparison', 'compare', 2),
+('DB Compare Tool', 'COMPARISON_RESULTS', 'INTERNAL', '/comparison', 'compare', 2),
 ('Deployment History', 'DEPLOYMENT_HISTORY', 'INTERNAL', '/history#history', 'history', 3),
 ('Backup Repository', 'BACKUP_REPOSITORY', 'INTERNAL', '/backups#backups', 'backup', 4),
 ('Configuration', 'CONFIGURATION', 'GROUP', NULL, 'settings', 3),
@@ -145,6 +145,24 @@ WHERE (child.menu_code, parent.menu_code) IN (
     ('ROLE_PERMISSIONS', 'CONFIGURATION'),
     ('DATABASE_MANAGEMENT', 'CONFIGURATION')
 );
+
+UPDATE app_security.menus
+SET parent_menu_id = NULL
+WHERE menu_code IN ('DEPLOYMENT_MANAGER', 'DEPLOYMENT_HISTORY', 'BACKUP_REPOSITORY');
+
+UPDATE app_security.menus child
+SET parent_menu_id = parent.menu_id
+FROM app_security.menus parent
+WHERE child.menu_code = 'COMPARISON_RESULTS'
+    AND parent.menu_code = 'DATABASE_OPERATIONS';
+
+UPDATE app_security.menus
+SET menu_name = 'Database Operation Module'
+WHERE menu_code = 'DATABASE_OPERATIONS';
+
+UPDATE app_security.menus
+SET menu_name = 'DB Compare Tool'
+WHERE menu_code = 'COMPARISON_RESULTS';
 
 INSERT INTO app_security.role_menu_permissions (role_id, menu_id, can_view, can_create, can_edit, can_delete, can_execute)
 SELECT r.role_id, m.menu_id,

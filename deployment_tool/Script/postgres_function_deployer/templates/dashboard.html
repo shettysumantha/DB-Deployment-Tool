@@ -4,19 +4,19 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="csrf-token" content="{{ csrf_token }}">
-	<title>Home | Database Operations</title>
+	<title>Home | DBA Operations Platform</title>
 	<link rel="stylesheet" href="/static/css/style.css?v=enterprise3">
 </head>
 <body class="app-page">
 	{% include 'partials_sidebar.html' %}
 	<header class="topbar dashboard-topbar">
 		<div class="page-shell dashboard-topbar-inner">
-			<div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DATABASE OPERATIONS</div><h1>Function Deployment Manager</h1></div></div>
+			<div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>DBA Operations Platform</h1></div></div>
 			<div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
 		</div>
 	</header>
 	<main class="main-content dashboard-content">
-		<header class="app-header"><div><p class="eyebrow accent">CONTROL PLANE</p><h1>Welcome, {{ session.get('full_name') or session.get('username') }}</h1><p>Database Operations Overview</p></div></header>
+		<header class="app-header"><div><p class="eyebrow accent">CONTROL PLANE</p><h1>Welcome, {{ session.get('full_name') or session.get('username') }}</h1><p>DBA Operations Platform Overview</p></div></header>
 		<section class="dashboard-grid">
 			{% for menu in sidebar_menus %}
 				{% for item in menu.children if menu.children %}

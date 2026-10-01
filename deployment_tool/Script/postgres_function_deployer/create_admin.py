@@ -11,10 +11,6 @@ from services.security_service import admin_exists, create_bootstrap_admin, init
 
 initialize_security()
 
-if admin_exists():
-    print("An Admin account already exists. No changes made.")
-    raise SystemExit(0)
-
 username = input("Admin username: ").strip()
 email = input("Admin email: ").strip()
 password = getpass.getpass("Password: ")
