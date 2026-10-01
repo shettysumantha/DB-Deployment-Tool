@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Create Admin Account | Database Operations</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=admin-register1">
+</head>
+<body class="auth-page">
+  <main class="login-card">
+    <div class="brand-mark">PG</div>
+    <p class="eyebrow accent">DATABASE OPERATIONS</p>
+    <h1>Create Admin Account</h1>
+    <p class="login-copy">Create the administrator account for this application.</p>
+    {% if success %}
+      <div class="notice" role="status">{{ success }}</div>
+      <a class="btn btn-warning w-100" href="{{ login_url or url_for('login', admin='1') }}">Go to Admin Login</a>
+    {% elif already_exists %}
+      <div class="notice auth-error" role="alert">An Admin account already exists. Please use Admin Login.</div>
+      <a class="btn btn-warning w-100" href="{{ url_for('login', admin='1') }}">Back to Login</a>
+    {% else %}
+      {% if error %}<div class="notice auth-error" role="alert">{{ error }}</div>{% endif %}
+      <form method="post" action="{{ url_for('admin_register') }}" autocomplete="off" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Admin Username<input name="username" value="{{ values.username or '' }}" required maxlength="100" autocomplete="username"></label>
+        {% if field_errors.username %}<p class="field-error" role="alert">{{ field_errors.username }}</p>{% endif %}
+        <label>Email<input name="email" type="email" value="{{ values.email or '' }}" required maxlength="255" autocomplete="email"></label>
+        {% if field_errors.email %}<p class="field-error" role="alert">{{ field_errors.email }}</p>{% endif %}
+        <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+        {% if field_errors.password %}<p class="field-error" role="alert">{{ field_errors.password }}</p>{% endif %}
+        <label>Confirm Password<input name="confirm_password" type="password" required minlength="8" autocomplete="new-password"></label>
+        {% if field_errors.confirm_password %}<p class="field-error" role="alert">{{ field_errors.confirm_password }}</p>{% endif %}
+        <label>Admin Passkey<input name="passkey" type="password" required autocomplete="off" aria-describedby="passkeyError"></label>
+        {% if field_errors.passkey %}<p id="passkeyError" class="field-error" role="alert">{{ field_errors.passkey }}</p>{% endif %}
+        <div class="registration-actions"><button class="btn btn-warning" type="submit">Create Admin Account</button><a class="btn btn-outline-light" href="{{ url_for('login', admin='1') }}">Back to Login</a></div>
+      </form>
+    {% endif %}
+  </main>
+</body>
+</html>

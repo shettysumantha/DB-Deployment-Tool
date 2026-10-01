@@ -62,6 +62,15 @@ body[data-can-deploy="false"] #deployBtnBottom { display: none; }
 .auth-links a:hover, .bootstrap-link:hover { text-decoration: underline; }
 .setup-required { margin: 20px 0 6px; color: #ffcf8a; font-size: 12px; }
 .bootstrap-link { font-size: 12px; }
+.admin-access-panel { margin-top: 18px; padding: 15px; background: #22333d; border-left: 3px solid var(--cyan); }
+.admin-access-panel h2, .admin-registration h3 { margin: 0 0 9px; font-size: 16px; }
+.admin-access-copy { margin: 0 0 12px; color: #b4c6d0; font-size: 12px; }
+.admin-registration { margin-top: 15px; padding-top: 15px; border-top: 1px solid #40515b; }
+.admin-registration h3 { font-size: 14px; }
+.registration-actions { display: flex; gap: 9px; }
+.registration-actions .btn { flex: 1; }
+.field-error { margin: -7px 0 10px; color: #ff9a86; font-size: 12px; }
+[hidden] { display: none !important; }
 .auth-error { margin-bottom: 12px; color: #ffcf8a; }
 .dashboard-grid, .admin-panel { padding: 12px 32px 32px; }
 .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 14px; }

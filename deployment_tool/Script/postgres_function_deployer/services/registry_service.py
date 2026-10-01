@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 
+from config import APP_DATABASE_URL
 from .db_service import connection
 
 
@@ -27,10 +28,7 @@ load_dotenv(
 # ==========================================================
 
 def _application_database_config():
-    database_url = os.getenv(
-        "APP_DATABASE_URL",
-        ""
-    ).strip()
+    database_url = APP_DATABASE_URL
 
     if not database_url:
         return None
@@ -65,12 +63,7 @@ def _application_database_config():
 
 
 def application_database_configured():
-    return bool(
-        os.getenv(
-            "APP_DATABASE_URL",
-            ""
-        ).strip()
-    )
+    return bool(APP_DATABASE_URL)
 
 
 # ==========================================================

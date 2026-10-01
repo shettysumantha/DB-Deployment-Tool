@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 try:
     from dotenv import load_dotenv
@@ -35,3 +36,22 @@ PG_DEFAULTS = {
 }
 PG_PASSWORD = os.getenv("PG_PASSWORD", "")
 ADMIN_BOOTSTRAP_PASSKEY = os.getenv("ADMIN_BOOTSTRAP_PASSKEY", "")
+
+APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
+if not APP_DATABASE_URL:
+    app_db_host = os.getenv("PG_HOST", "localhost").strip()
+    app_db_port = int(os.getenv("PG_PORT", "5432"))
+    app_db_name = os.getenv("PG_DATABASE", "MyDatabase").strip()
+    app_db_user = os.getenv("PG_USER", "postgres").strip()
+    app_db_password = PG_PASSWORD
+    app_db_sslmode = os.getenv("PG_SSLMODE", "prefer").strip()
+    if app_db_host and app_db_name and app_db_user:
+        if ":" in app_db_host and not app_db_host.startswith("["):
+            app_db_host = f"[{app_db_host}]"
+        credentials = quote(app_db_user, safe="")
+        if app_db_password:
+            credentials += f":{quote(app_db_password, safe='')}"
+        APP_DATABASE_URL = (
+            f"postgresql://{credentials}@{app_db_host}:{app_db_port}/"
+            f"{quote(app_db_name, safe='')}?sslmode={quote(app_db_sslmode, safe='')}"
+        )

@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
 
 from config import ADMIN_BOOTSTRAP_PASSKEY
-from services.security_service import admin_exists, create_bootstrap_admin
+from services.security_service import admin_exists, create_bootstrap_admin, initialize_security
+
+initialize_security()
 
 if admin_exists():
     print("An Admin account already exists. No changes made.")

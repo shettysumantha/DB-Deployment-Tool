@@ -31,6 +31,16 @@ CREATE TABLE IF NOT EXISTS app_security.user_roles (
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (user_id, role_id)
 );
+ALTER TABLE app_security.users
+    ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE app_security.users u
+SET is_admin = TRUE
+WHERE EXISTS (
+    SELECT 1
+    FROM app_security.user_roles ur
+    JOIN app_security.roles r ON r.role_id = ur.role_id
+    WHERE ur.user_id = u.user_id AND r.role_name = 'ADMIN'
+);
 CREATE TABLE IF NOT EXISTS app_security.menus (
     menu_id BIGSERIAL PRIMARY KEY,
     parent_menu_id BIGINT REFERENCES app_security.menus(menu_id) ON DELETE CASCADE,

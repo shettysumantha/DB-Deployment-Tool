@@ -85,15 +85,15 @@ APP_USER=developer
 APP_DATABASE_URL=
 ```
 
-`APP_DATABASE_URL` is the PostgreSQL database used for saved connection metadata and `tbl_deployment_backup_registry`. When it is set, the backup list and backup metadata are stored there. If it is empty, the registry falls back to the connected Live database for backward compatibility.
+`APP_DATABASE_URL` optionally selects the application PostgreSQL database for authentication, saved connection metadata, and `tbl_deployment_backup_registry`. If it is empty, the application database connection is assembled server-side from `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD`, and optional `PG_SSLMODE`.
 
-Authentication and the database-driven sidebar also use `APP_DATABASE_URL`. Run the idempotent `database_security.sql` migration against that database with:
+The authentication migration runs automatically on application startup and retries on requests if the database is temporarily unavailable. It extends the existing `app_security.users` table and creates only missing auth tables; the explicit migration command is also available:
 
 ```powershell
 .\.venv\Scripts\python.exe init_security.py
 ```
 
-Set `ADMIN_BOOTSTRAP_PASSKEY` in the ignored local `.env`, then open `/login` and use **Create Admin Account** when setup is required. The passkey is checked server-side and is not an account password. Bootstrap refuses to create another Admin once an Admin role assignment exists. The command-line `create_admin.py` uses the same one-time passkey flow. Do not configure an Admin password in source code or the example file.
+Set `ADMIN_BOOTSTRAP_PASSKEY` in the ignored local `.env`, then open `/login`, select **Admin Login**, and use **Create Admin Account**. Registration opens at `/admin/register`. The passkey is checked server-side and is not an account password. Bootstrap refuses to create another Admin once an Admin role assignment or `is_admin` flag exists. The command-line `create_admin.py` uses the same one-time passkey flow. Do not configure an Admin password in source code or the example file.
 
 Admins can create users and assign multiple modules from the existing `app_security.menus` list. The database stores assignments in `app_security.user_menu_access`; direct route/API access is checked server-side. Existing users remain role-permission based until an Admin saves explicit module access for them.
 

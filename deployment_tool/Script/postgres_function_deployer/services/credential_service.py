@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+from config import APP_DATABASE_URL
 
 
 # ==========================================================
@@ -32,10 +33,7 @@ load_dotenv(
 # APPLICATION DATABASE CONFIGURATION
 # ==========================================================
 
-APP_DB_URL = os.getenv(
-    "APP_DATABASE_URL",
-    ""
-).strip()
+APP_DB_URL = APP_DATABASE_URL
 
 
 # ==========================================================

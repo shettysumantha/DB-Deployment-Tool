@@ -1,23 +1,29 @@
 import hashlib
 import hmac
-import os
+import re
 import secrets
+import threading
 from contextlib import contextmanager
-from urllib.parse import parse_qs, urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
+from psycopg2.errors import UniqueViolation
 from werkzeug.security import check_password_hash, generate_password_hash
 from psycopg2.extras import Json
 
+from config import APP_DATABASE_URL
 from .db_service import connection
 
 
 SCHEMA = "app_security"
+_schema_initialized = False
+_schema_init_lock = threading.Lock()
 
 
 def _config_from_url():
-    value = os.getenv("APP_DATABASE_URL", "").strip()
+    value = APP_DATABASE_URL.strip()
     if not value:
-        raise ValueError("APP_DATABASE_URL must be configured for authentication.")
+        raise ValueError("Configure APP_DATABASE_URL or PG_HOST, PG_DATABASE, and PG_USER for the application database.")
     parsed = urlparse(value)
     if parsed.scheme not in ("postgres", "postgresql") or not parsed.hostname:
         raise ValueError("APP_DATABASE_URL must be a PostgreSQL connection URL.")
@@ -25,9 +31,9 @@ def _config_from_url():
     return {
         "host": parsed.hostname,
         "port": parsed.port or 5432,
-        "database": (parsed.path or "").lstrip("/"),
-        "username": parsed.username or "",
-        "password": parsed.password or "",
+        "database": unquote((parsed.path or "").lstrip("/")),
+        "username": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
         "sslmode": query.get("sslmode", ["require"])[0],
     }
 
@@ -38,13 +44,28 @@ def security_connection():
         yield conn
 
 
+def initialize_security():
+    global _schema_initialized
+    if _schema_initialized:
+        return
+    with _schema_init_lock:
+        if _schema_initialized:
+            return
+        migration = Path(__file__).resolve().parent.parent / "database_security.sql"
+        with security_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(migration.read_text(encoding="utf-8"))
+            conn.commit()
+        _schema_initialized = True
+
+
 def authenticate(identifier, password, admin_required=False):
     with security_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                   SELECT user_id, username, email, full_name, password_hash,
-                      session_version, must_change_password
+                      session_version, must_change_password, is_admin
                 FROM app_security.users
                 WHERE is_active AND (username = %s OR lower(email) = lower(%s))
                 """,
@@ -63,7 +84,7 @@ def authenticate(identifier, password, admin_required=False):
                 (user[0],),
             )
             roles = [row[0] for row in cur.fetchall()]
-            if admin_required and "ADMIN" not in roles:
+            if admin_required and (not user[7] or "ADMIN" not in roles):
                 return {"admin_access_denied": True}
             cur.execute(
                 "UPDATE app_security.users SET last_login_at = CURRENT_TIMESTAMP WHERE user_id = %s",
@@ -82,7 +103,7 @@ def authenticate(identifier, password, admin_required=False):
     return {
         "user_id": user[0], "username": user[1], "email": user[2],
         "full_name": user[3], "roles": roles, "session_version": user[5],
-        "must_change_password": user[6],
+        "must_change_password": user[6], "is_admin": user[7],
     }
 
 
@@ -91,6 +112,21 @@ def user_is_active(user_id):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT is_active FROM app_security.users WHERE user_id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+    return bool(row and row[0])
+
+
+def user_is_admin(user_id):
+    with security_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT u.is_admin AND EXISTS (
+                       SELECT 1 FROM app_security.user_roles ur
+                       JOIN app_security.roles r ON r.role_id = ur.role_id
+                       WHERE ur.user_id = u.user_id AND r.role_name = 'ADMIN' AND r.is_active
+                   ) FROM app_security.users u WHERE u.user_id = %s AND u.is_active""",
                 (user_id,),
             )
             row = cur.fetchone()
@@ -123,7 +159,10 @@ def user_roles(user_id):
 
 
 def user_has_role(user_id, role_name):
-    return role_name.upper() in user_roles(user_id)
+    role_name = role_name.upper()
+    if role_name == "ADMIN":
+        return user_is_admin(user_id)
+    return role_name in user_roles(user_id)
 
 
 def list_modules():
@@ -171,9 +210,9 @@ def admin_exists():
             cur.execute(
                 """SELECT EXISTS (
                        SELECT 1 FROM app_security.users u
-                       JOIN app_security.user_roles ur ON ur.user_id = u.user_id
-                       JOIN app_security.roles r ON r.role_id = ur.role_id
-                       WHERE r.role_name = 'ADMIN'
+                       LEFT JOIN app_security.user_roles ur ON ur.user_id = u.user_id
+                       LEFT JOIN app_security.roles r ON r.role_id = ur.role_id
+                       WHERE u.is_admin OR r.role_name = 'ADMIN'
                    )"""
             )
             return cur.fetchone()[0]
@@ -189,13 +228,15 @@ def create_bootstrap_admin(data, configured_passkey):
             audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "invalid_passkey"})
         except Exception:
             pass
-        raise ValueError("Admin passkey is invalid.")
+        raise ValueError("Passkey is wrong.")
     if not username or not email:
         try:
             audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "missing_identity"})
         except Exception:
             pass
         raise ValueError("Admin username and email are required.")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Enter a valid email address.")
     try:
         validate_password(password)
     except ValueError:
@@ -204,47 +245,58 @@ def create_bootstrap_admin(data, configured_passkey):
         except Exception:
             pass
         raise
-    with security_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_xact_lock(94825731)")
-            cur.execute(
-                """SELECT EXISTS (
-                       SELECT 1 FROM app_security.users u
-                       JOIN app_security.user_roles ur ON ur.user_id = u.user_id
-                       JOIN app_security.roles r ON r.role_id = ur.role_id
-                       WHERE r.role_name = 'ADMIN'
-                   )"""
-            )
-            if cur.fetchone()[0]:
-                raise ValueError("An Admin account already exists.")
-            cur.execute(
-                "INSERT INTO app_security.roles (role_name, role_description, is_active) VALUES ('ADMIN', 'Full application administration', TRUE) ON CONFLICT (role_name) DO UPDATE SET is_active = TRUE RETURNING role_id"
-            )
-            admin_role_id = cur.fetchone()[0]
-            cur.execute(
-                """INSERT INTO app_security.users
-                   (username, email, full_name, password_hash, is_active, module_access_configured)
-                   VALUES (%s, %s, %s, %s, TRUE, FALSE) RETURNING user_id""",
-                (username, email, data.get("full_name") or username, password_hash(password)),
-            )
-            user_id = cur.fetchone()[0]
-            cur.execute(
-                "INSERT INTO app_security.user_roles (user_id, role_id) VALUES (%s, %s)",
-                (user_id, admin_role_id),
-            )
-            cur.execute(
-                """INSERT INTO app_security.role_menu_permissions
-                   (role_id, menu_id, can_view, can_create, can_edit, can_delete, can_execute)
-                   SELECT %s, menu_id, TRUE, TRUE, TRUE, TRUE,
-                          menu_code = 'DEPLOYMENT_MANAGER'
-                   FROM app_security.menus WHERE is_active
-                   ON CONFLICT (role_id, menu_id) DO UPDATE SET
-                     can_view = TRUE, can_create = TRUE, can_edit = TRUE,
-                     can_delete = TRUE, can_execute = EXCLUDED.can_execute""",
-                (admin_role_id,),
-            )
-            _audit(cur, user_id, "ADMIN_BOOTSTRAP_SUCCESS", user_id)
-        conn.commit()
+    try:
+        with security_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(94825731)")
+                cur.execute(
+                    """SELECT EXISTS (
+                           SELECT 1 FROM app_security.users u
+                           LEFT JOIN app_security.user_roles ur ON ur.user_id = u.user_id
+                           LEFT JOIN app_security.roles r ON r.role_id = ur.role_id
+                           WHERE u.is_admin OR r.role_name = 'ADMIN'
+                       )"""
+                )
+                if cur.fetchone()[0]:
+                    _audit(cur, None, "ADMIN_BOOTSTRAP_FAILED", details={"reason": "admin_already_exists"})
+                    raise ValueError("An Admin account already exists.")
+                cur.execute(
+                    "INSERT INTO app_security.roles (role_name, role_description, is_active) VALUES ('ADMIN', 'Full application administration', TRUE) ON CONFLICT (role_name) DO UPDATE SET is_active = TRUE RETURNING role_id"
+                )
+                admin_role_id = cur.fetchone()[0]
+                cur.execute(
+                    """INSERT INTO app_security.users
+                       (username, email, full_name, password_hash, is_active, module_access_configured, is_admin)
+                       VALUES (%s, %s, %s, %s, TRUE, FALSE, TRUE) RETURNING user_id""",
+                    (username, email, data.get("full_name") or username, password_hash(password)),
+                )
+                user_id = cur.fetchone()[0]
+                cur.execute(
+                    "INSERT INTO app_security.user_roles (user_id, role_id) VALUES (%s, %s)",
+                    (user_id, admin_role_id),
+                )
+                cur.execute(
+                    """INSERT INTO app_security.role_menu_permissions
+                       (role_id, menu_id, can_view, can_create, can_edit, can_delete, can_execute)
+                       SELECT %s, menu_id, TRUE, TRUE, TRUE, TRUE,
+                              menu_code = 'DEPLOYMENT_MANAGER'
+                       FROM app_security.menus WHERE is_active
+                       ON CONFLICT (role_id, menu_id) DO UPDATE SET
+                         can_view = TRUE, can_create = TRUE, can_edit = TRUE,
+                         can_delete = TRUE, can_execute = EXCLUDED.can_execute""",
+                    (admin_role_id,),
+                )
+                _audit(cur, user_id, "ADMIN_BOOTSTRAP_SUCCESS", user_id)
+            conn.commit()
+    except UniqueViolation as exc:
+        constraint = (getattr(getattr(exc, "diag", None), "constraint_name", "") or "").lower()
+        reason = "username_exists" if "username" in constraint else "email_exists" if "email" in constraint else "duplicate_identity"
+        try:
+            audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": reason})
+        except Exception:
+            pass
+        message = "Username already exists." if reason == "username_exists" else "Email already exists." if reason == "email_exists" else "Username or email already exists."
+        raise ValueError(message) from exc
     return user_id
 
 
@@ -361,8 +413,8 @@ def user_menus(user_id):
     with security_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT u.module_access_configured,
-                          EXISTS (SELECT 1 FROM app_security.user_roles ur
+                  """SELECT u.module_access_configured,
+                      u.is_admin AND EXISTS (SELECT 1 FROM app_security.user_roles ur
                                   JOIN app_security.roles r ON r.role_id = ur.role_id
                                   WHERE ur.user_id = u.user_id AND r.is_active AND r.role_name = 'ADMIN')
                    FROM app_security.users u WHERE u.user_id = %s""",
@@ -413,7 +465,7 @@ def has_permission(user_id, menu_code, permission="can_view"):
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT u.module_access_configured,
-                          EXISTS (SELECT 1 FROM app_security.user_roles ur
+                          u.is_admin AND EXISTS (SELECT 1 FROM app_security.user_roles ur
                                   JOIN app_security.roles r ON r.role_id = ur.role_id
                                   WHERE ur.user_id = u.user_id AND r.is_active AND r.role_name = 'ADMIN')
                    FROM app_security.users u WHERE u.user_id = %s AND u.is_active""",
@@ -494,7 +546,7 @@ def delete_menu(menu_id):
 def list_users():
     with security_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT u.user_id, u.username, u.email, u.full_name, u.is_active,
+            cur.execute("""SELECT u.user_id, u.username, u.email, u.full_name, u.is_active, u.is_admin,
                     u.created_at, u.last_login_at,
                     COALESCE(string_agg(DISTINCT r.role_name, ', ' ORDER BY r.role_name), ''),
                     CASE WHEN u.module_access_configured
@@ -519,7 +571,7 @@ def list_users():
                     WHERE inherited_role.user_id = u.user_id
                 ) inherited ON TRUE
                 GROUP BY u.user_id, inherited.module_ids, inherited.module_names ORDER BY u.username""")
-            columns = ("user_id", "username", "email", "full_name", "is_active", "created_at", "last_login_at", "roles", "modules", "module_ids")
+            columns = ("user_id", "username", "email", "full_name", "is_active", "is_admin", "created_at", "last_login_at", "roles", "modules", "module_ids")
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
@@ -563,7 +615,12 @@ def create_user(data):
         raise ValueError("A role is required.")
     with security_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO app_security.users (username, email, full_name, password_hash, is_active, module_access_configured) VALUES (%s,%s,%s,%s,%s,TRUE) RETURNING user_id", (data["username"].strip(), data.get("email") or None, data.get("full_name") or data["username"], password_hash(password), bool(data.get("is_active", True))))
+            cur.execute("SELECT role_name FROM app_security.roles WHERE role_id = %s AND is_active", (role_id,))
+            role = cur.fetchone()
+            if not role:
+                raise ValueError("The selected role is inactive or unavailable.")
+            is_admin = role[0] == "ADMIN"
+            cur.execute("INSERT INTO app_security.users (username, email, full_name, password_hash, is_active, module_access_configured, is_admin) VALUES (%s,%s,%s,%s,%s,TRUE,%s) RETURNING user_id", (data["username"].strip(), data.get("email") or None, data.get("full_name") or data["username"], password_hash(password), bool(data.get("is_active", True)), is_admin))
             user_id = cur.fetchone()[0]
             cur.execute("INSERT INTO app_security.user_roles (user_id, role_id) VALUES (%s,%s)", (user_id, role_id))
             _save_user_modules(cur, user_id, data.get("module_ids", []))
@@ -582,9 +639,12 @@ def update_user(user_id, data):
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT EXISTS (
-                       SELECT 1 FROM app_security.user_roles ur
-                       JOIN app_security.roles r ON r.role_id = ur.role_id
-                       WHERE ur.user_id = %s AND r.role_name = 'ADMIN' AND r.is_active
+                       SELECT 1 FROM app_security.users u
+                       WHERE u.user_id = %s AND (u.is_admin OR EXISTS (
+                           SELECT 1 FROM app_security.user_roles ur
+                           JOIN app_security.roles r ON r.role_id = ur.role_id
+                           WHERE ur.user_id = u.user_id AND r.role_name = 'ADMIN' AND r.is_active
+                       ))
                    ), (SELECT is_active FROM app_security.users WHERE user_id = %s)""",
                 (user_id, user_id),
             )
@@ -597,15 +657,18 @@ def update_user(user_id, data):
                 remains_admin = bool(selected_role and selected_role[0] == "ADMIN")
             else:
                 remains_admin = was_admin
+            will_be_admin = remains_admin if role_id else bool(was_admin)
             will_be_active = bool(data.get("is_active", True))
             if "password" in data and data["password"]:
                 raise ValueError("Use the password reset flow to change a user's password.")
             if was_admin and was_active and (not remains_admin or not will_be_active):
                 cur.execute(
-                    """SELECT COUNT(*) FROM app_security.users u
-                       JOIN app_security.user_roles ur ON ur.user_id = u.user_id
-                       JOIN app_security.roles r ON r.role_id = ur.role_id
-                       WHERE u.is_active AND r.is_active AND r.role_name = 'ADMIN'"""
+                          """SELECT COUNT(*) FROM app_security.users u
+                              WHERE u.is_active AND (u.is_admin OR EXISTS (
+                                    SELECT 1 FROM app_security.user_roles ur
+                                    JOIN app_security.roles r ON r.role_id = ur.role_id
+                                    WHERE ur.user_id = u.user_id AND r.is_active AND r.role_name = 'ADMIN'
+                              ))"""
                 )
                 if cur.fetchone()[0] <= 1:
                     raise ValueError("The last active Admin cannot be deactivated or demoted.")
@@ -613,12 +676,13 @@ def update_user(user_id, data):
                 """UPDATE app_security.users
                    SET username = %s, email = %s, full_name = %s,
                        is_active = %s, updated_at = CURRENT_TIMESTAMP,
+                       is_admin = CASE WHEN %s THEN %s ELSE is_admin END,
                        module_access_configured = CASE WHEN %s THEN TRUE ELSE module_access_configured END,
                        session_version = session_version + CASE WHEN is_active <> %s THEN 1 ELSE 0 END
                    WHERE user_id = %s""",
                 (username, data.get("email") or None,
                  data.get("full_name") or username,
-                 will_be_active, "module_ids" in data, will_be_active, user_id),
+                 will_be_active, bool(role_id), will_be_admin, "module_ids" in data, will_be_active, user_id),
             )
             if cur.rowcount != 1:
                 raise ValueError("User was not found.")

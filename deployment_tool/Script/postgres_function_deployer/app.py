@@ -1,5 +1,9 @@
 import os
+import hmac
+import re
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,7 +21,7 @@ from services.registry_service import application_database_configured, ensure_re
 from services.sql_generator import generate_script
 from services.credential_service import connection_config, get_database, list_databases, save_database, update_database
 from services.notification_service import send_deployment_notification
-from services.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
+from services.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
@@ -31,6 +35,47 @@ app.config.update(
 )
 vault = {}
 app.extensions["credential_vault"] = vault
+_bootstrap_failures = {}
+_bootstrap_failures_lock = threading.Lock()
+_security_init_failure_logged = False
+
+
+def ensure_security_initialized():
+    global _security_init_failure_logged
+    try:
+        initialize_security()
+        _security_init_failure_logged = False
+        return True
+    except Exception:
+        if not _security_init_failure_logged:
+            app.logger.exception("Application security schema initialization failed; retrying on the next request")
+            _security_init_failure_logged = True
+        return False
+
+
+with app.app_context():
+    ensure_security_initialized()
+
+
+def bootstrap_rate_limited(remote_addr):
+    now = time.monotonic()
+    with _bootstrap_failures_lock:
+        failures = [stamp for stamp in _bootstrap_failures.get(remote_addr, []) if now - stamp < 900]
+        _bootstrap_failures[remote_addr] = failures
+        return len(failures) >= 5
+
+
+def record_bootstrap_failure(remote_addr):
+    now = time.monotonic()
+    with _bootstrap_failures_lock:
+        failures = [stamp for stamp in _bootstrap_failures.get(remote_addr, []) if now - stamp < 900]
+        failures.append(now)
+        _bootstrap_failures[remote_addr] = failures
+
+
+def clear_bootstrap_failures(remote_addr):
+    with _bootstrap_failures_lock:
+        _bootstrap_failures.pop(remote_addr, None)
 
 
 @app.errorhandler(403)
@@ -62,13 +107,15 @@ def enforce_login():
     if request.path == "/health" or request.path.startswith("/static/"):
         return None
 
+    ensure_security_initialized()
+
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         expected = session.get("_csrf_token", "")
         supplied = request.form.get("csrf_token", "") or request.headers.get("X-CSRFToken", "")
         if not expected or not supplied or not secrets.compare_digest(expected, supplied):
             abort(400)
 
-    if request.path in {"/login", "/admin/bootstrap", "/forgot-password"} or request.path.startswith("/reset-password/"):
+    if request.path in {"/login", "/admin/bootstrap", "/admin/register", "/forgot-password"} or request.path.startswith("/reset-password/"):
         return None
 
     if not session.get("user_id"):
@@ -116,15 +163,38 @@ def login():
     if session.get("user_id"):
         return redirect(url_for("dashboard"))
 
-    setup_required = False
-    setup_available = False
+    message = "Password changed successfully. Please login." if request.args.get("changed") else None
+    return render_template(
+        "login.html",
+        **login_page_context(
+            admin_login_checked=request.args.get("admin") == "1",
+            show_admin_access=request.args.get("admin") == "1",
+            show_admin_registration=request.args.get("register") == "1",
+        ),
+        success=message,
+    )
+
+
+def login_page_context(
+    *, admin_login_checked=False, show_admin_access=False,
+    show_admin_registration=False, login_identifier="", bootstrap_values=None,
+    field_errors=None, bootstrap_message=None,
+):
     try:
-        setup_required = not admin_exists()
-        setup_available = setup_required and bool(ADMIN_BOOTSTRAP_PASSKEY)
+        has_admin = admin_exists()
     except Exception:
         app.logger.exception("Admin setup status check failed")
-    message = "Password changed successfully. Please login." if request.args.get("changed") else None
-    return render_template("login.html", setup_required=setup_required, setup_available=setup_available, success=message)
+        has_admin = False
+    return {
+        "admin_exists": has_admin,
+        "show_admin_access": show_admin_access or admin_login_checked,
+        "show_admin_registration": show_admin_registration and not has_admin,
+        "admin_login_checked": admin_login_checked,
+        "login_identifier": login_identifier,
+        "bootstrap_values": bootstrap_values or {},
+        "field_errors": field_errors or {},
+        "bootstrap_message": bootstrap_message,
+    }
 
 
 @app.post("/login")
@@ -142,7 +212,11 @@ def login_submit():
 
     if user and user.get("admin_access_denied"):
         record_failed_login(identifier)
-        return render_template("login.html", error="This account does not have Admin access."), 403
+        return render_template(
+            "login.html",
+            error="This account does not have Admin access.",
+            **login_page_context(admin_login_checked=True, show_admin_access=True, login_identifier=identifier),
+        ), 403
 
     if user:
         session.clear()
@@ -154,7 +228,7 @@ def login_submit():
         })
         if user["must_change_password"]:
             return redirect(url_for("profile_password"))
-        if request.form.get("next") == url_for("profile_password"):
+        if request.form.get("next", "").rstrip("?") == url_for("profile_password"):
             return redirect(url_for("profile_password"))
         return redirect(url_for("dashboard"))
 
@@ -162,40 +236,107 @@ def login_submit():
 
     return render_template(
         "login.html",
-        error="Invalid username or password."
+        error="Invalid username or password.",
+        **login_page_context(admin_login_checked=admin_login, show_admin_access=admin_login, login_identifier=identifier),
     ), 401
 
 
-@app.route("/admin/bootstrap", methods=["GET", "POST"])
+@app.route("/admin/register", methods=["GET", "POST"], endpoint="admin_register")
+@app.route("/admin/bootstrap", methods=["GET", "POST"], endpoint="admin_bootstrap")
 def admin_bootstrap():
+    if request.method == "GET" and request.path == "/admin/bootstrap":
+        return redirect(url_for("admin_register"))
+
+    data = request.form.to_dict() if request.method == "POST" else {}
+    values = {"username": data.get("username", "").strip(), "email": data.get("email", "").strip()}
+
+    def registration_response(message=None, field=None, status=400, *, already_exists=False, success=None):
+        field_errors = {field: message} if field else {}
+        return render_template(
+            "admin_register.html",
+            error=None if field else message,
+            success=success,
+            already_exists=already_exists,
+            values=values,
+            field_errors=field_errors,
+        ), status
+
     try:
-        if admin_exists():
-            if request.method == "POST":
-                try:
-                    audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "admin_already_exists"})
-                except Exception:
-                    app.logger.exception("Admin bootstrap failure audit write failed")
-            return render_template("admin_bootstrap.html", already_exists=True), 409
+        exists = admin_exists()
     except Exception:
-        app.logger.exception("Admin bootstrap status check failed")
-        return render_template("admin_bootstrap.html", error="Admin setup is unavailable. Check application database configuration."), 503
+        app.logger.exception("Admin registration database check failed")
+        return registration_response("Unable to connect to the application database.", status=503)
+    if exists:
+        if request.method == "POST":
+            try:
+                audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "admin_already_exists"})
+            except Exception:
+                app.logger.exception("Admin bootstrap failure audit write failed")
+        return registration_response(
+            "An Admin account already exists. Please use Admin Login.",
+            already_exists=True,
+            status=409 if request.method == "POST" else 200,
+        )
     if request.method == "GET":
-        return render_template("admin_bootstrap.html", already_exists=False)
-    data = request.form.to_dict()
+        return render_template("admin_register.html", values={}, field_errors={})
+
+    remote_addr = request.remote_addr or "unknown"
+    if bootstrap_rate_limited(remote_addr):
+        try:
+            audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "rate_limited"})
+        except Exception:
+            app.logger.exception("Admin bootstrap rate-limit audit write failed")
+        return registration_response("Too many failed attempts. Try again in 15 minutes.", "passkey", 429)
+
+    passkey = data.get("passkey", "")
+    if not passkey:
+        record_bootstrap_failure(remote_addr)
+        try:
+            audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "missing_passkey"})
+        except Exception:
+            app.logger.exception("Admin bootstrap failure audit write failed")
+        return registration_response("Admin passkey is required.", "passkey")
+    if not ADMIN_BOOTSTRAP_PASSKEY or not hmac.compare_digest(passkey, ADMIN_BOOTSTRAP_PASSKEY):
+        record_bootstrap_failure(remote_addr)
+        try:
+            audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "invalid_passkey"})
+        except Exception:
+            app.logger.exception("Admin bootstrap failure audit write failed")
+        return registration_response("Passkey is wrong.", "passkey")
+
+    if not values["username"]:
+        return registration_response("Username is required.", "username")
+    if not values["email"]:
+        return registration_response("Email is required.", "email")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", values["email"]):
+        return registration_response("Enter a valid email address.", "email")
+    if not data.get("password"):
+        return registration_response("Password is required.", "password")
+    if not data.get("confirm_password"):
+        return registration_response("Confirm password is required.", "confirm_password")
     if data.get("password") != data.get("confirm_password"):
         try:
             audit_event("ADMIN_BOOTSTRAP_FAILED", details={"reason": "password_mismatch"})
         except Exception:
             app.logger.exception("Admin bootstrap failure audit write failed")
-        return render_template("admin_bootstrap.html", error="Passwords do not match."), 400
+        return registration_response("Passwords do not match.", "confirm_password")
     try:
         create_bootstrap_admin(data, ADMIN_BOOTSTRAP_PASSKEY)
-        return render_template("login.html", success="Admin account created successfully. Please login.")
+        clear_bootstrap_failures(remote_addr)
+        return render_template(
+            "admin_register.html",
+            success="Admin account created successfully. Please login.",
+            login_url=url_for("login", admin="1"),
+            values=values,
+            field_errors={},
+        )
     except ValueError as exc:
-        return render_template("admin_bootstrap.html", error=str(exc)), 400
+        message = str(exc)
+        field = "username" if "Username already exists" in message else "email" if "Email already exists" in message else None
+        return registration_response(message, field)
     except Exception:
-        app.logger.exception("Admin bootstrap failed")
-        return render_template("admin_bootstrap.html", error="Unable to create Admin account."), 400
+        app.logger.exception("Admin registration failed")
+        return registration_response("Unable to create Admin account.")
 
 
 @app.route("/forgot-password", methods=["GET", "POST"])
