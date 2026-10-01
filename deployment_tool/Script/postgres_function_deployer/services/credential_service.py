@@ -24,7 +24,7 @@ ENV_FILE = os.path.join(
 
 load_dotenv(
     dotenv_path=ENV_FILE,
-    override=True
+    override=False
 )
 
 
@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS tbl_database_credentials (
 
     username TEXT NOT NULL,
 
+    environment VARCHAR(20) NOT NULL DEFAULT 'DEVELOPMENT',
+
     sslmode TEXT,
 
     created_by TEXT NOT NULL,
@@ -89,7 +91,20 @@ CREATE TABLE IF NOT EXISTS tbl_database_credentials (
             username
         )
 );
+
+ALTER TABLE tbl_database_credentials
+    ADD COLUMN IF NOT EXISTS environment VARCHAR(20)
+    NOT NULL DEFAULT 'DEVELOPMENT';
 """
+
+ENVIRONMENTS = {"LOCAL", "DEVELOPMENT", "TEST", "PRODUCTION"}
+
+
+def _clean_environment(value):
+    environment = str(value or "DEVELOPMENT").strip().upper()
+    if environment not in ENVIRONMENTS:
+        raise ValueError("Environment must be LOCAL, DEVELOPMENT, TEST, or PRODUCTION.")
+    return environment
 
 
 # ==========================================================
@@ -163,6 +178,9 @@ def _row_to_public(row):
         "username":
             row["username"],
 
+        "environment":
+            row["environment"],
+
         "sslmode":
             row["sslmode"] or "",
     }
@@ -189,6 +207,7 @@ def list_databases():
                     port,
                     database_name,
                     username,
+                    environment,
                     sslmode
                 FROM tbl_database_credentials
                 WHERE is_active = TRUE
@@ -242,6 +261,7 @@ def get_database(database_id):
                     port,
                     database_name,
                     username,
+                    environment,
                     sslmode
                 FROM tbl_database_credentials
                 WHERE id = %s
@@ -336,7 +356,8 @@ def connection_config(
 
 def save_database(
     alias,
-    config
+    config,
+    environment=None,
 ):
 
     alias = str(
@@ -379,6 +400,8 @@ def save_database(
     if not sslmode:
         sslmode = "require"
 
+    environment = _clean_environment(environment or config.get("environment"))
+
     try:
 
         with store() as database:
@@ -397,11 +420,13 @@ def save_database(
                         port,
                         database_name,
                         username,
+                        environment,
                         sslmode,
                         created_by
                     )
                     VALUES
                     (
+                        %s,
                         %s,
                         %s,
                         %s,
@@ -418,6 +443,7 @@ def save_database(
                         config["port"],
                         config["database"],
                         config["username"],
+                        environment,
                         sslmode,
                         created_by,
                     )
@@ -451,7 +477,8 @@ def save_database(
 def update_database(
     database_id,
     alias,
-    config
+    config,
+    environment=None,
 ):
 
     alias = str(
@@ -506,6 +533,8 @@ def update_database(
     if not sslmode:
         sslmode = "require"
 
+    environment = _clean_environment(environment) if environment is not None else None
+
     try:
 
         with store() as database:
@@ -522,6 +551,7 @@ def update_database(
                         port = %s,
                         database_name = %s,
                         username = %s,
+                        environment = COALESCE(%s, environment),
                         sslmode = %s,
                         updated_by = %s,
                         updated_date =
@@ -536,6 +566,7 @@ def update_database(
                         config["port"],
                         config["database"],
                         config["username"],
+                        environment,
                         sslmode,
                         editor,
                         database_id,

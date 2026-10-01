@@ -2,22 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>Sign in | Database Operations</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=auth1">
+  <link rel="stylesheet" href="/static/css/style.css?v=enterprise3">
 </head>
 <body class="auth-page">
   <main class="login-card">
     <div class="brand-mark">PG</div>
     <p class="eyebrow accent">DATABASE OPERATIONS</p>
     <h1>Function Deployment Manager</h1>
-    <p class="login-copy">Sign in to review and move database changes.</p>
+    <p class="login-copy">Sign in to Database Operations.</p>
+    {% if success %}<div class="notice" role="status">{{ success }}</div>{% endif %}
     {% if error %}<div class="notice auth-error" role="alert">{{ error }}</div>{% endif %}
     <form method="post" action="{{ url_for('login_submit') }}" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
-      <label>Username or email<input name="identifier" autocomplete="username" required autofocus></label>
+      <label>Username<input name="identifier" autocomplete="username" required autofocus></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <label class="admin-login-toggle"><input name="admin_login" type="checkbox">Admin Login</label>
       <button class="btn btn-warning w-100" type="submit">Login</button>
     </form>
+    <nav class="auth-links" aria-label="Account help"><a href="{{ url_for('forgot_password') }}">Forgot Password?</a><a href="{{ url_for('profile_password') }}">Change Password</a></nav>
+    {% if setup_required %}
+      <p class="setup-required">Admin setup required.</p>
+      {% if setup_available %}<a class="bootstrap-link" href="{{ url_for('admin_bootstrap') }}">Create Admin Account</a>{% else %}<p class="setup-required">Admin bootstrap passkey is not configured.</p>{% endif %}
+    {% endif %}
   </main>
 </body>
 </html>

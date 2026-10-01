@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Create Admin | Database Operations</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=enterprise3">
+</head>
+<body class="auth-page">
+  <main class="login-card">
+    <div class="brand-mark">PG</div>
+    <p class="eyebrow accent">FIRST-TIME SETUP</p>
+    <h1>Create Admin Account</h1>
+    {% if already_exists %}<div class="notice error" role="alert">An Admin account already exists. Use Admin User Management to add another account.</div><a href="{{ url_for('login') }}">Return to Login</a>
+    {% else %}
+      {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+      <form method="post" action="{{ url_for('admin_bootstrap') }}" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Admin Username<input name="username" required maxlength="100" autocomplete="username"></label>
+        <label>Admin Email<input name="email" type="email" required maxlength="255" autocomplete="email"></label>
+        <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+        <label>Confirm Password<input name="confirm_password" type="password" required minlength="8" autocomplete="new-password"></label>
+        <label>Admin Passkey<input name="passkey" type="password" required autocomplete="off"></label>
+        <button class="btn btn-warning w-100" type="submit">Create Admin Account</button>
+      </form>
+    {% endif %}
+  </main>
+</body>
+</html>

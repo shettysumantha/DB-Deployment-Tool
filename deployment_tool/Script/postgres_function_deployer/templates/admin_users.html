@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>User Management | Database Operations</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=enterprise3">
+</head>
+<body class="app-page">
+  {% include 'partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DATABASE OPERATIONS</div><h1>Function Deployment Manager</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content admin-content">
+    <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>User Management</h1></div></header>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice {{ 'error' if category == 'error' else '' }}">{{ message }}</div>{% endfor %}
+    {% endwith %}
+    <section class="admin-section">
+      <h2>Create User</h2>
+      <form class="admin-form user-create-form" method="post" action="{{ url_for('admin_user_create_form') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Username<input name="username" required maxlength="100" autocomplete="off"></label>
+        <label>Email<input name="email" type="email" maxlength="255"></label>
+        <label>Full name<input name="full_name" maxlength="150"></label>
+        <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+        <label>Confirm password<input name="confirm_password" type="password" required minlength="8" autocomplete="new-password"></label>
+        <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}">{{ role.role_name }}</option>{% endfor %}</select></label>
+        <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.menu_id }}">{{ module.menu_name }}</label>{% endfor %}</div></fieldset>
+        <button class="btn btn-primary" type="submit">Create user</button>
+      </form>
+    </section>
+    <section class="admin-section">
+      <div class="admin-section-heading"><h2>Users</h2><span>{{ users|length }} accounts</span></div>
+      <div class="table-wrap admin-table-wrap">
+        <table class="admin-users-table">
+          <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Modules</th><th>Created</th><th>Last login</th><th>Actions</th></tr></thead>
+          <tbody>
+            {% for user in users %}
+              <tr>
+                <td colspan="8">
+                  <form class="user-edit-row" method="post" action="{{ url_for('admin_user_update_form', user_id=user.user_id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <label>Username<input name="username" value="{{ user.username }}" required></label>
+                    <label>Email<input name="email" type="email" value="{{ user.email or '' }}"></label>
+                    <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}"{% if role.role_name in user.roles.split(', ') %} selected{% endif %}>{{ role.role_name }}</option>{% endfor %}</select></label>
+                    <label class="user-status-field"><input type="checkbox" name="is_active" value="true"{% if user.is_active %} checked{% endif %}><span>{{ 'Active' if user.is_active else 'Inactive' }}</span></label>
+                    <span class="user-module-count">{{ user.module_ids|length }} modules</span>
+                    <span class="user-created">{{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '—' }}</span>
+                    <span class="user-last-login">{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else 'Never' }}</span>
+                    <div class="user-update-fields">
+                      <label>Full name<input name="full_name" value="{{ user.full_name or '' }}"></label>
+                      <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.menu_id }}"{% if module.menu_id in user.module_ids %} checked{% endif %}>{{ module.menu_name }}</label>{% endfor %}</div></fieldset>
+                      <button class="btn btn-secondary" type="submit">Save</button>
+                      <button class="btn btn-outline-secondary" type="submit" formaction="{{ url_for('admin_user_password_reset', user_id=user.user_id) }}">Send Password Reset</button>
+                    </div>
+                  </form>
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="8" class="empty-state">No application users found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

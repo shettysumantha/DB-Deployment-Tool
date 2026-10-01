@@ -87,18 +87,25 @@ APP_DATABASE_URL=
 
 `APP_DATABASE_URL` is the PostgreSQL database used for saved connection metadata and `tbl_deployment_backup_registry`. When it is set, the backup list and backup metadata are stored there. If it is empty, the registry falls back to the connected Live database for backward compatibility.
 
-Authentication and the database-driven sidebar also use `APP_DATABASE_URL`. Run `database_security.sql` once against that database, then create the first administrator interactively:
+Authentication and the database-driven sidebar also use `APP_DATABASE_URL`. Run the idempotent `database_security.sql` migration against that database with:
 
 ```powershell
 .\.venv\Scripts\python.exe init_security.py
-.\.venv\Scripts\python.exe create_admin.py
 ```
+
+Set `ADMIN_BOOTSTRAP_PASSKEY` in the ignored local `.env`, then open `/login` and use **Create Admin Account** when setup is required. The passkey is checked server-side and is not an account password. Bootstrap refuses to create another Admin once an Admin role assignment exists. The command-line `create_admin.py` uses the same one-time passkey flow. Do not configure an Admin password in source code or the example file.
+
+Admins can create users and assign multiple modules from the existing `app_security.menus` list. The database stores assignments in `app_security.user_menu_access`; direct route/API access is checked server-side. Existing users remain role-permission based until an Admin saves explicit module access for them.
+
+Forgot-password reset tokens are stored hashed and expire after 20 minutes. Configure the existing Brevo SMTP variables to deliver reset links. For local development with `FLASK_DEBUG=true`, a reset link is written only to the server log when delivery cannot be used. Password reset responses do not disclose whether an account exists.
 
 The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
 
 ### Database variables
 
-The current workflow also supports saving database metadata through the application's SQLite credential registry. These variables document the established T&D and Live configuration names:
+Saved deployment connection metadata is stored in PostgreSQL using `APP_DATABASE_URL`. Database passwords are not stored there and are never returned by the API. `PG_*` values provide defaults for a matching connection; `PG_PASSWORD` is read only by the server and is never rendered in the page. Source and target passwords may be entered at connection time.
+
+The established T&D and Live-specific environment names remain supported for deployment configuration:
 
 ```env
 TD_DB_HOST=

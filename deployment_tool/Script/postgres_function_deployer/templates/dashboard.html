@@ -1,3 +1,42 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dashboard | Database Operations</title><link rel="stylesheet" href="/static/css/style.css?v=auth1"></head>
-<body class="app-page">{% include 'partials_sidebar.html' %}<main class="main-content"><header class="app-header"><div><p class="eyebrow accent">CONTROL PLANE</p><h1>Welcome, {{ session.get('full_name') or session.get('username') }}</h1></div><button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-collapsed')">☰</button></header><section class="dashboard-grid"><article><span class="eyebrow">DATABASE OPERATIONS</span><h2>Review changes with confidence.</h2><p>Use the navigation to compare PostgreSQL functions and tables, inspect deployment history, and manage backups.</p><a class="btn btn-warning" href="/">Open Deployment Manager</a></article></section></main></body></html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="csrf-token" content="{{ csrf_token }}">
+	<title>Home | Database Operations</title>
+	<link rel="stylesheet" href="/static/css/style.css?v=enterprise3">
+</head>
+<body class="app-page">
+	{% include 'partials_sidebar.html' %}
+	<header class="topbar dashboard-topbar">
+		<div class="page-shell dashboard-topbar-inner">
+			<div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DATABASE OPERATIONS</div><h1>Function Deployment Manager</h1></div></div>
+			<div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+		</div>
+	</header>
+	<main class="main-content dashboard-content">
+		<header class="app-header"><div><p class="eyebrow accent">CONTROL PLANE</p><h1>Welcome, {{ session.get('full_name') or session.get('username') }}</h1><p>Database Operations Overview</p></div></header>
+		<section class="dashboard-grid">
+			{% for menu in sidebar_menus %}
+				{% for item in menu.children if menu.children %}
+					{% if not item.children and item.menu_type != 'EXTERNAL' %}
+						{% set target = '/deployment' if item.route_path == '/' else item.route_path|replace('/#', '/deployment#') %}
+						{% set description = {
+							'Deployment Manager': 'Deploy PostgreSQL functions and database changes.',
+							'Comparison Results': 'Review source and target database differences.',
+							'Deployment History': 'Track previous deployment operations.',
+							'Backup Repository': 'Review backups created before deployment.',
+							'User Management': 'Manage application users and access.',
+							'Role Management': 'Review roles and permissions.',
+							'Database Management': 'Configure source and target connections.'
+						}.get(item.menu_name, 'Open ' ~ item.menu_name ~ '.') %}
+						<a class="dashboard-module" href="{{ target }}"><span class="sidebar-icon">{{ item.icon or '◆' }}</span><h2>{{ item.menu_name }}</h2><p>{{ description }}</p><span class="module-open">Open module <span aria-hidden="true">→</span></span></a>
+					{% endif %}
+				{% endfor %}
+			{% endfor %}
+				<a class="dashboard-module" href="/profile"><span class="sidebar-icon">◎</span><h2>Profile</h2><p>Manage your account password and security.</p><span class="module-open">Open module <span aria-hidden="true">→</span></span></a>
+		</section>
+	</main>
+</body>
+</html>
