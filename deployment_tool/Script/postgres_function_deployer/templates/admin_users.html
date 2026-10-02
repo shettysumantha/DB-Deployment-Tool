@@ -35,7 +35,7 @@
       </form>
     </section>
     <section class="admin-section">
-      <div class="admin-section-heading"><h2>Users</h2><span>{{ users|length }} accounts</span></div>
+      <div class="admin-section-heading"><h2>Users</h2><span>{{ users|length }} accounts on this page</span></div>
       <div class="table-wrap admin-table-wrap">
         <table class="admin-users-table">
           <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Modules</th><th>Created</th><th>Last login</th><th>Actions</th></tr></thead>
@@ -67,6 +67,11 @@
           </tbody>
         </table>
       </div>
+      <nav class="admin-section-heading" aria-label="User list pages">
+        {% if page > 1 %}<a class="btn btn-secondary" href="{{ url_for('admin_users', page=page - 1, page_size=page_size) }}">Previous</a>{% endif %}
+        <span>Page {{ page }}</span>
+        {% if has_next %}<a class="btn btn-secondary" href="{{ url_for('admin_users', page=page + 1, page_size=page_size) }}">Next</a>{% endif %}
+      </nav>
     </section>
   </main>
 </body>

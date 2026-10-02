@@ -87,7 +87,7 @@ APP_DATABASE_URL=
 
 `APP_DATABASE_URL` optionally selects the application PostgreSQL database for authentication, saved connection metadata, and `tbl_deployment_backup_registry`. If it is empty, the application database connection is assembled server-side from `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD`, and optional `PG_SSLMODE`.
 
-The authentication migration runs automatically on application startup and retries on requests if the database is temporarily unavailable. It extends the existing `app_security.users` table and creates only missing auth tables; the explicit migration command is also available:
+The DBA must manually execute `database_security.sql` in PostgreSQL/DB Solo before starting the application. Flask does not execute this script or modify the schema. On startup, the application only checks that `app_security.users` exists. The `init_security.py` helper prints the canonical script location and does not connect to or modify the database:
 
 ```powershell
 .\.venv\Scripts\python.exe init_security.py

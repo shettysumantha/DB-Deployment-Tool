@@ -4,7 +4,6 @@ import re
 import secrets
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from psycopg2.errors import UniqueViolation
@@ -47,16 +46,20 @@ def security_connection():
 def initialize_security():
     global _schema_initialized
     if _schema_initialized:
-        return
+        return True
     with _schema_init_lock:
         if _schema_initialized:
-            return
-        migration = Path(__file__).resolve().parent.parent / "database_security.sql"
+            return True
         with security_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(migration.read_text(encoding="utf-8"))
-            conn.commit()
+                cur.execute("SELECT to_regclass(%s)", ("app_security.users",))
+                if cur.fetchone()[0] is None:
+                    raise RuntimeError(
+                        "Required security database objects are unavailable. "
+                        "A DBA must manually execute database_security.sql."
+                    )
         _schema_initialized = True
+    return True
 
 
 def authenticate(identifier, password, admin_required=False):
@@ -542,35 +545,16 @@ def delete_menu(menu_id):
         conn.commit()
 
 
-def list_users():
+def list_users(limit=50, offset=0, user_id=None):
+    limit = max(1, min(int(limit), 101))
+    offset = max(0, int(offset))
     with security_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("""SELECT u.user_id, u.username, u.email, u.full_name, u.is_active, u.is_admin,
-                    u.created_at, u.last_login_at,
-                    COALESCE(string_agg(DISTINCT r.role_name, ', ' ORDER BY r.role_name), ''),
-                    CASE WHEN u.module_access_configured
-                         THEN COALESCE(string_agg(DISTINCT m.menu_name, ', ' ORDER BY m.menu_name), '')
-                         ELSE COALESCE(inherited.module_names, '') END,
-                    CASE WHEN u.module_access_configured
-                         THEN COALESCE(array_agg(DISTINCT a.menu_id) FILTER (WHERE a.menu_id IS NOT NULL), ARRAY[]::BIGINT[])
-                         ELSE COALESCE(inherited.module_ids, ARRAY[]::BIGINT[]) END
-                FROM app_security.users u
-                LEFT JOIN app_security.user_roles ur ON ur.user_id = u.user_id
-                LEFT JOIN app_security.roles r ON r.role_id = ur.role_id
-                LEFT JOIN app_security.user_menu_access a ON a.user_id = u.user_id
-                LEFT JOIN app_security.menus m ON m.menu_id = a.menu_id
-                LEFT JOIN LATERAL (
-                    SELECT array_agg(DISTINCT inherited_menu.menu_id) AS module_ids,
-                           string_agg(DISTINCT inherited_menu.menu_name, ', ' ORDER BY inherited_menu.menu_name) AS module_names
-                    FROM app_security.user_roles inherited_role
-                    JOIN app_security.roles inherited_active ON inherited_active.role_id = inherited_role.role_id AND inherited_active.is_active
-                    JOIN app_security.role_menu_permissions inherited_permission ON inherited_permission.role_id = inherited_active.role_id AND inherited_permission.can_view
-                    JOIN app_security.menus inherited_menu ON inherited_menu.menu_id = inherited_permission.menu_id
-                        AND inherited_menu.is_active AND inherited_menu.menu_type = 'INTERNAL'
-                    WHERE inherited_role.user_id = u.user_id
-                ) inherited ON TRUE
-                GROUP BY u.user_id, inherited.module_ids, inherited.module_names ORDER BY u.username""")
-            columns = ("user_id", "username", "email", "full_name", "is_active", "is_admin", "created_at", "last_login_at", "roles", "modules", "module_ids")
+            cur.execute(
+                "SELECT * FROM app_security.fn_get_users(%s, %s, %s)",
+                (limit, offset, user_id),
+            )
+            columns = [column.name for column in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 

@@ -48,7 +48,7 @@ def ensure_security_initialized():
         return True
     except Exception:
         if not _security_init_failure_logged:
-            app.logger.exception("Application security schema initialization failed; retrying on the next request")
+            app.logger.exception("Required security database objects are unavailable; retrying validation on the next request")
             _security_init_failure_logged = True
         return False
 
@@ -467,13 +467,27 @@ def admin_menu_delete(menu_id):
 @app.get("/admin/users")
 def admin_users():
     require_permission("USER_MANAGEMENT")
-    return render_template("admin_users.html", users=list_users(), roles=list_roles(), modules=list_modules())
+    page = max(1, request.args.get("page", 1, type=int) or 1)
+    page_size = max(1, min(100, request.args.get("page_size", 25, type=int) or 25))
+    users = list_users(page_size + 1, (page - 1) * page_size)
+    has_next = len(users) > page_size
+    return render_template(
+        "admin_users.html", users=users[:page_size], roles=list_roles(), modules=list_modules(),
+        page=page, page_size=page_size, has_next=has_next,
+    )
 
 
 @app.get("/api/admin/users")
 def admin_users_api():
     require_permission("USER_MANAGEMENT")
-    return jsonify({"users": list_users()})
+    page = max(1, request.args.get("page", 1, type=int) or 1)
+    page_size = max(1, min(100, request.args.get("page_size", 50, type=int) or 50))
+    users = list_users(page_size + 1, (page - 1) * page_size)
+    has_next = len(users) > page_size
+    return jsonify({
+        "users": users[:page_size], "page": page,
+        "page_size": page_size, "has_next": has_next,
+    })
 
 
 @app.post("/api/admin/users")
@@ -551,7 +565,7 @@ def admin_user_deactivate(user_id):
 def admin_user_password_reset(user_id):
     require_permission("USER_MANAGEMENT", "can_edit")
     try:
-        user = next((item for item in list_users() if item["user_id"] == user_id), None)
+        user = next(iter(list_users(limit=1, user_id=user_id)), None)
         if user:
             reset = request_password_reset(user["username"])
             if reset and reset["token"]:
