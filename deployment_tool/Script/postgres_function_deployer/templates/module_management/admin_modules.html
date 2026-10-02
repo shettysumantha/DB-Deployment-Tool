@@ -103,6 +103,17 @@
       notice.className = `notice ${error ? 'error' : ''}`;
       notice.classList.remove('d-none');
     };
+    const previousRegistrationNotice = sessionStorage.getItem('moduleRegistrationNotice');
+    if (previousRegistrationNotice) {
+      const {message, moduleId} = JSON.parse(previousRegistrationNotice);
+      sessionStorage.removeItem('moduleRegistrationNotice');
+      showNotice(message);
+      const row = document.querySelector(`tr[data-module-id="${moduleId}"]`);
+      if (row) {
+        row.scrollIntoView({behavior: 'smooth', block: 'center'});
+        row.querySelector('[data-enabled="true"]')?.focus();
+      }
+    }
     const send = async (url, method, body) => {
       const response = await fetch(url, {
         method,
@@ -110,7 +121,11 @@
         body: body === undefined ? undefined : JSON.stringify(body),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Module request failed.');
+      if (!response.ok) {
+        const error = new Error(data.error || 'Module request failed.');
+        error.code = data.code;
+        throw error;
+      }
       return data;
     };
     const registerForm = document.getElementById('moduleRegisterForm');
@@ -147,11 +162,17 @@
         return;
       }
       try {
-        await send('/api/admin/modules', 'POST', {
+        const result = await send('/api/admin/modules', 'POST', {
           ...endpoints,
           parent_menu_id: registerForm.elements.parent_menu_id.value,
           display_order: registerForm.elements.display_order.value,
         });
+        if (result.already_registered) {
+          sessionStorage.setItem('moduleRegistrationNotice', JSON.stringify({
+            message: result.message,
+            moduleId: result.module.module_id,
+          }));
+        }
         location.reload();
       } catch (error) { showNotice(error.message, true); }
     });

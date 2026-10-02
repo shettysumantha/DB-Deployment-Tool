@@ -65,16 +65,30 @@ class FakePermissionConnection:
 
 
 class FakeRegistryCursor:
-    def __init__(self):
+    def __init__(self, existing_module=None):
         self.executed = []
         self.result = None
+        self.existing_module = existing_module
 
     def execute(self, query, parameters=()):
         self.executed.append((query, parameters))
         if query.lstrip().startswith("INSERT INTO app_security.modules"):
-            self.result = {
+            self.result = None if self.existing_module else {
                 "module_id": 25, "module_code": "DB_SCHEMA_TRACKER",
-                "module_name": "DB Schema Tracker", "is_enabled": False,
+                "module_name": "DB Schema Tracker", "module_type": "EXTERNAL",
+                "web_url": "https://module.example/app", "is_active": True,
+                "is_enabled": False,
+            }
+        elif query.lstrip().startswith("SELECT") and "FOR UPDATE" in query:
+            self.result = self.existing_module
+        elif query.lstrip().startswith("UPDATE app_security.modules") and "RETURNING module_code" in query:
+            self.result = ("DB_SCHEMA_TRACKER",)
+        elif query.lstrip().startswith("UPDATE app_security.modules"):
+            self.result = {
+                **self.existing_module,
+                "module_name": parameters[0],
+                "web_url": parameters[3],
+                "is_active": True,
             }
         elif "RETURNING module_code" in query:
             self.result = ("DB_SCHEMA_TRACKER",)
@@ -90,8 +104,8 @@ class FakeRegistryCursor:
 
 
 class FakeRegistryConnection:
-    def __init__(self):
-        self.cursor_instance = FakeRegistryCursor()
+    def __init__(self, existing_module=None):
+        self.cursor_instance = FakeRegistryCursor(existing_module)
         self.committed = False
 
     def cursor(self, cursor_factory=None):
@@ -303,8 +317,59 @@ class ModuleServiceTests(unittest.TestCase):
         self.assertFalse(record["is_enabled"])
         statements = [query for query, _parameters in connection.cursor_instance.executed]
         self.assertIn("INSERT INTO app_security.role_module_permissions", statements[1])
-        self.assertIn("MODULE_REGISTERED", statements[2])
+        self.assertEqual(connection.cursor_instance.executed[2][1][1], "MODULE_REGISTERED")
         self.assertTrue(connection.committed)
+
+    def test_same_code_and_url_reuses_existing_registration(self):
+        existing = {
+            "module_id": 41, "module_code": "DB_SCHEMA_TRACKER_1", "module_type": "EXTERNAL",
+            "web_url": "https://DB-SCHEMA-TRACKER-1.onrender.com", "is_enabled": False,
+            "is_active": False,
+        }
+        manifest = {
+            "module_code": "DB_SCHEMA_TRACKER_1", "module_name": "DB Schema Tracker 1",
+            "description": "", "version": "1.0.0", "web_url": "https://db-schema-tracker-1.onrender.com/",
+            "api_base_url": None, "manifest_url": None, "health_url": None,
+            "entry_path": "/", "icon": "database", "capabilities": [], "health_status": "UNKNOWN",
+        }
+        connection = FakeRegistryConnection(existing)
+        with patch.object(module_service, "security_connection", return_value=connection):
+            record = module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=10)
+
+        statements = connection.cursor_instance.executed
+        self.assertTrue(record["registration_reused"])
+        self.assertFalse(record["is_enabled"])
+        self.assertTrue(record["is_active"])
+        self.assertEqual(record["module_id"], 41)
+        self.assertEqual(sum(query.lstrip().startswith("INSERT INTO app_security.modules") for query, _ in statements), 1)
+        self.assertIn("ON CONFLICT (module_code) DO NOTHING", statements[0][0])
+        self.assertIn("is_active = TRUE", statements[2][0])
+        self.assertNotIn("is_enabled =", statements[2][0])
+        self.assertEqual(statements[-1][1][1], "MODULE_REGISTRATION_REUSED")
+        self.assertTrue(connection.committed)
+
+    def test_same_code_and_different_url_raises_clear_conflict(self):
+        existing = {
+            "module_id": 41, "module_code": "DB_SCHEMA_TRACKER_1", "module_type": "EXTERNAL",
+            "web_url": "https://db-schema-tracker-1.onrender.com/", "is_enabled": False,
+            "is_active": True,
+        }
+        manifest = {
+            "module_code": "DB_SCHEMA_TRACKER_1", "module_name": "Other Tracker",
+            "description": "", "version": "1.0.0", "web_url": "https://another-schema-tracker.onrender.com/",
+            "api_base_url": None, "manifest_url": None, "health_url": None,
+            "entry_path": "/", "icon": "database", "capabilities": [], "health_status": "UNKNOWN",
+        }
+        connection = FakeRegistryConnection(existing)
+        with patch.object(module_service, "security_connection", return_value=connection):
+            with self.assertRaisesRegex(
+                module_service.ModuleCodeConflictError,
+                "Module code DB_SCHEMA_TRACKER_1 is already registered for another external application",
+            ):
+                module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=10)
+
+        self.assertFalse(connection.committed)
+        self.assertEqual(len(connection.cursor_instance.executed), 2)
 
     def test_web_only_registration_stores_null_api_urls_and_can_be_enabled(self):
         web_url = "https://db-schema-tracker-1.onrender.com/"
@@ -358,9 +423,18 @@ class ModuleServiceTests(unittest.TestCase):
         registered = {}
 
         def save_module(module, _actor_id, parent_menu_id, display_order):
+            registration_reused = bool(registered)
             registered.update(module)
-            registered.update(module_id=65, parent_menu_id=parent_menu_id, display_order=display_order)
+            registered.update(
+                module_id=65, parent_menu_id=parent_menu_id, display_order=display_order,
+                is_enabled=registered.get("is_enabled", False), is_active=True,
+                registration_reused=registration_reused,
+            )
             return registered
+
+        def enable_module(_module_id, enabled, _actor_id):
+            registered["is_enabled"] = enabled
+            return enabled
 
         with patch.object(app_module, "ensure_security_initialized", return_value=True), patch.object(
             app_module, "user_session_state",
@@ -370,7 +444,7 @@ class ModuleServiceTests(unittest.TestCase):
         ), patch.object(app_module, "require_permission"), patch.object(
             app_module, "list_parent_menus", return_value=[{"menu_id": 44, "menu_name": "Database Operation Module"}],
         ), patch.object(app_module, "register_module", side_effect=save_module), patch.object(
-            app_module, "set_module_enabled", return_value=True,
+            app_module, "set_module_enabled", side_effect=enable_module,
         ), patch.object(app_module, "module_permission", return_value=True), patch.object(
             app_module, "get_launch_target",
             return_value={"module_type": "EXTERNAL", "web_url": web_url, "entry_path": "/"},
@@ -404,15 +478,54 @@ class ModuleServiceTests(unittest.TestCase):
                     (None, None, None),
                 )
 
+                duplicate = client.post(
+                    "/api/admin/modules",
+                    json={**payload, "parent_menu_id": 44, "display_order": 10},
+                    headers=headers,
+                )
+                self.assertEqual(duplicate.status_code, 200)
+                self.assertTrue(duplicate.json["already_registered"])
+                self.assertIn("already registered but disabled", duplicate.json["message"])
+
                 enabled = client.put(
                     "/api/admin/modules/65/enabled", json={"enabled": True}, headers=headers,
                 )
                 self.assertEqual(enabled.status_code, 200)
                 self.assertTrue(enabled.json["is_enabled"])
 
+                duplicate_enabled = client.post(
+                    "/api/admin/modules",
+                    json={**payload, "parent_menu_id": 44, "display_order": 10},
+                    headers=headers,
+                )
+                self.assertEqual(duplicate_enabled.status_code, 200)
+                self.assertTrue(duplicate_enabled.json["is_enabled"])
+                self.assertIn("already registered and enabled", duplicate_enabled.json["message"])
+
                 launched = client.get("/modules/DB_SCHEMA_TRACKER_1/launch")
                 self.assertEqual(launched.status_code, 302)
                 self.assertEqual(launched.headers["Location"], web_url)
+
+                conflicting_manifest = {
+                    "module_code": "DB_SCHEMA_TRACKER_1", "module_name": "Other Tracker",
+                    "version": "1.0.0", "web_url": "https://another-schema-tracker.onrender.com/",
+                    "api_base_url": None, "manifest_url": None, "health_url": None,
+                    "entry_path": "/", "icon": "database", "capabilities": [],
+                }
+                with patch.object(
+                    app_module, "validate_module_registration", return_value=conflicting_manifest,
+                ), patch.object(
+                    app_module, "register_module",
+                    side_effect=module_service.ModuleCodeConflictError("DB_SCHEMA_TRACKER_1"),
+                ):
+                    conflict = client.post(
+                        "/api/admin/modules",
+                        json={"web_url": conflicting_manifest["web_url"], "parent_menu_id": 44},
+                        headers=headers,
+                    )
+                self.assertEqual(conflict.status_code, 409)
+                self.assertEqual(conflict.json["code"], "MODULE_CODE_CONFLICT")
+                self.assertIn("another external application", conflict.json["error"])
 
 
 if __name__ == "__main__":

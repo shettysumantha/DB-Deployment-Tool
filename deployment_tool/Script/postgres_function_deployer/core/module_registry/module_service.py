@@ -23,6 +23,14 @@ MODULE_COLUMNS = """
 """
 
 
+class ModuleCodeConflictError(ValueError):
+    def __init__(self, module_code):
+        self.module_code = module_code
+        super().__init__(
+            f"Module code {module_code} is already registered for another external application."
+        )
+
+
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(self, hostname, port, address, timeout):
         super().__init__(hostname, port=port, timeout=timeout, context=ssl.create_default_context())
@@ -103,6 +111,14 @@ def _validate_internal_path(value, field_name, allow_empty=False):
     ):
         raise ValueError(f"{field_name} must be a local absolute path without URL or traversal segments.")
     return path
+
+
+def _normalized_external_url(value):
+    parsed = urlsplit(str(value or "").strip())
+    host = (parsed.hostname or "").lower().rstrip(".")
+    port = parsed.port or 443
+    path = parsed.path.rstrip("/") or "/"
+    return parsed.scheme.lower(), host, port, path
 
 
 def _fetch_json(url, *, expected_code=None, endpoint_name="Module endpoint"):
@@ -235,6 +251,7 @@ def validate_manifest(manifest_url):
 
 
 def register_module(manifest, actor_id, parent_menu_id, display_order=0):
+    health_status = manifest.get("health_status", "UNKNOWN")
     with security_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -247,6 +264,7 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
                             %s, %s, %s, %s, %s,
                             CASE WHEN %s = 'UP' THEN CURRENT_TIMESTAMP ELSE NULL END,
                             %s, %s)
+                    ON CONFLICT (module_code) DO NOTHING
                     RETURNING {MODULE_COLUMNS}""",
                 (
                     manifest["module_code"], manifest["module_name"], manifest["description"],
@@ -257,7 +275,53 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
                     Json(manifest["capabilities"]), actor_id,
                 ),
             )
-            module = dict(cur.fetchone())
+            module_row = cur.fetchone()
+            registration_reused = module_row is None
+            if registration_reused:
+                cur.execute(
+                    f"""SELECT {MODULE_COLUMNS} FROM app_security.modules
+                        WHERE module_code = %s FOR UPDATE""",
+                    (manifest["module_code"],),
+                )
+                existing = cur.fetchone()
+                if not existing:
+                    raise ValueError("The module registry changed during registration. Please retry.")
+                existing = dict(existing)
+                if (
+                    existing["module_type"] != "EXTERNAL"
+                    or _normalized_external_url(existing["web_url"])
+                    != _normalized_external_url(manifest["web_url"])
+                ):
+                    raise ModuleCodeConflictError(manifest["module_code"])
+                cur.execute(
+                    f"""UPDATE app_security.modules SET
+                            module_name = %s, description = %s, version = %s,
+                            web_url = %s, api_base_url = %s, manifest_url = %s,
+                            health_url = %s, entry_path = %s, icon = %s,
+                            parent_menu_id = %s, display_order = %s,
+                            health_status = %s,
+                            last_health_check_at = CASE
+                                WHEN %s = 'UP' THEN CURRENT_TIMESTAMP
+                                WHEN %s IS NULL THEN NULL
+                                ELSE last_health_check_at
+                            END,
+                            capabilities = %s, is_active = TRUE,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE module_id = %s
+                        RETURNING {MODULE_COLUMNS}""",
+                    (
+                        manifest["module_name"], manifest["description"], manifest["version"],
+                        manifest["web_url"], manifest["api_base_url"], manifest["manifest_url"],
+                        manifest["health_url"], manifest["entry_path"], manifest["icon"],
+                        parent_menu_id, max(0, int(display_order)), health_status,
+                        health_status, manifest["health_url"],
+                        Json(manifest["capabilities"]), existing["module_id"],
+                    ),
+                )
+                module_row = cur.fetchone()
+                if not module_row:
+                    raise ValueError("The existing module could not be updated. Please retry.")
+            module = dict(module_row)
             cur.execute(
                 """INSERT INTO app_security.role_module_permissions
                     (role_id, module_id, can_view, can_create, can_edit, can_delete, can_execute)
@@ -267,10 +331,15 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
             )
             cur.execute(
                 """INSERT INTO app_security.audit_logs (user_id, action, details)
-                   VALUES (%s, 'MODULE_REGISTERED', %s)""",
-                (actor_id, Json({"module_code": module["module_code"], "module_id": module["module_id"]})),
+                   VALUES (%s, %s, %s)""",
+                (
+                    actor_id,
+                    "MODULE_REGISTRATION_REUSED" if registration_reused else "MODULE_REGISTERED",
+                    Json({"module_code": module["module_code"], "module_id": module["module_id"]}),
+                ),
             )
         conn.commit()
+    module["registration_reused"] = registration_reused
     return module
 
 

@@ -9,10 +9,11 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
+from psycopg2.errors import CheckViolation
 
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
 from core.database.db_service import clean_config, safe_error, test_connection
-from core.module_registry.module_service import check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
+from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
 from core.security.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
 from modules.database_management.credential_service import connection_config, get_database, list_databases, save_database, update_database
 from modules.db_compare.services.backup_service import create_backup, safe_backup_path
@@ -755,12 +756,33 @@ def register_module_api():
             manifest, session["user_id"], parent_menu_id,
             int(payload.get("display_order", 0)),
         )
+        registration_reused = module.pop("registration_reused", False)
+        if registration_reused:
+            if module.get("is_enabled"):
+                message = f"{module['module_code']} is already registered and enabled."
+            else:
+                message = (
+                    f"{module['module_code']} is already registered but disabled. "
+                    "Enable it from the Registered Modules list."
+                )
+            return jsonify({
+                "module": module, "already_registered": True,
+                "message": message, "is_enabled": bool(module.get("is_enabled")),
+            }), 200
         return jsonify({"module": module, "is_enabled": False}), 201
+    except ModuleCodeConflictError as exc:
+        return jsonify({"error": str(exc), "code": "MODULE_CODE_CONFLICT"}), 409
+    except CheckViolation:
+        app.logger.exception("Module registry schema rejected an external module registration")
+        return jsonify({
+            "error": "The module registry schema is outdated. Run database/database_security.sql to enable optional API URLs.",
+            "code": "MODULE_REGISTRY_SCHEMA_OUTDATED",
+        }), 503
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception:
         app.logger.exception("Module registration failed")
-        return jsonify({"error": "Unable to register this module. Verify that its code is not already registered."}), 409
+        return jsonify({"error": "Unable to register this module because of a registry or database error."}), 500
 
 
 @app.put("/api/admin/modules/<int:module_id>")
