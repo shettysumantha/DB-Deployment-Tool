@@ -11,17 +11,24 @@ Deployment-Tool/
 ├── README.md
 └── deployment_tool/Script/postgres_function_deployer/
     ├── app.py
-    ├── config.py
+    ├── core/
+    │   ├── config/
+    │   ├── database/
+    │   ├── security/
+    │   └── module_registry/
+    ├── modules/
+    │   ├── database_management/
+    │   └── db_compare/
+    ├── database/
     ├── requirements.txt
     ├── .env.example
-    ├── test_notification.py
-    ├── services/
+    ├── tests/
     ├── templates/
     ├── static/
     └── generated_scripts/
 ```
 
-`app.py` exposes the Flask object named `app`. `config.py` loads local `.env` values with `python-dotenv`, while Render supplies the same values through its Environment Variables settings.
+`app.py` exposes the Flask object named `app` and remains the route-composition entry point. Shared configuration, database access, security, and module-registry code live under `core/`; database configuration and DB Compare services live under `modules/`. Templates, static resources, tests, and the manually executed database prerequisite are grouped by owner. `core/config/config.py` loads the app-root `.env` with `python-dotenv`, while Render supplies the same values through its Environment Variables settings.
 
 ## 2. Requirements
 
@@ -93,7 +100,13 @@ The DBA must manually execute `database_security.sql` in PostgreSQL/DB Solo befo
 .\.venv\Scripts\python.exe init_security.py
 ```
 
-Set `ADMIN_BOOTSTRAP_PASSKEY` in the ignored local `.env`, then open `/login`, select **Admin Login**, and use **Create Admin Account**. Registration opens at `/admin/register`. The passkey is checked server-side and is not an account password. Bootstrap refuses to create another Admin once an Admin role assignment or `is_admin` flag exists. The command-line `create_admin.py` uses the same one-time passkey flow. Do not configure an Admin password in source code or the example file.
+### Module registry
+
+`database_security.sql` is also the canonical setup for the module registry and its role grants. Execute the updated script manually before using Configuration → Module Management. `DB_COMPARE` is seeded as the first internal module; deployment, history, and backup remain features inside it. Future remote modules must publish `/api/module-manifest` and `/api/health` endpoints that return the registered module code and semantic version. Admins validate a manifest, choose its navigation group, register it disabled, review its metadata, and explicitly enable it.
+
+Remote module URLs must use HTTPS, resolve only to public IP addresses, and must not redirect during server-side validation. Set `TRUSTED_MODULE_HOSTS` to a comma-separated list of exact hostnames to restrict registration further. No remote JavaScript is loaded into the platform, and no credentials or user session tokens are forwarded when launching an external module. External module authentication/SSO must be provided by a separately designed integration.
+
+Set `ADMIN_BOOTSTRAP_PASSKEY` in the ignored local `.env`, then open `/login`, select **Admin Login**, and use **Create Admin Account**. Registration opens at `/admin/register`. The passkey is checked server-side and is not an account password. Bootstrap refuses to create another Admin once an Admin role assignment or `is_admin` flag exists. The command-line bootstrap utility is `modules/authentication/create_admin.py`; run it from the app root with `python -m modules.authentication.create_admin`. Do not configure an Admin password in source code or the example file.
 
 Admins can create users and assign multiple modules from the existing `app_security.menus` list. The database stores assignments in `app_security.user_menu_access`; direct route/API access is checked server-side. Existing users remain role-permission based until an Admin saves explicit module access for them.
 
@@ -153,7 +166,7 @@ These are required only when the existing mobile notification integration is ena
 Run:
 
 ```powershell
-.\.venv\Scripts\python.exe test_notification.py
+.\.venv\Scripts\python.exe -m tests.db_compare.test_notification
 ```
 
 The script checks the same `BREVO_SMTP_*` names used by the application and never prints the password. A configured test reports:

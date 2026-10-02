@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Database Management | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+</head>
+<body class="app-page">
+  {% include 'shared/partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>DBA Operations Platform</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content admin-content">
+    <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Database Management</h1></div></header>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="notice {{ 'error' if category == 'error' else '' }}">{{ message }}</div>{% endfor %}
+    {% endwith %}
+    <section class="admin-section">
+      <h2>Add connection</h2>
+      <form class="admin-form database-create-form" method="post" action="{{ url_for('admin_database_create') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Alias<input name="database_alias" required maxlength="100"></label>
+        <label>Environment<select name="environment"><option>LOCAL</option><option>DEVELOPMENT</option><option>TEST</option><option>PRODUCTION</option></select></label>
+        <label>Host<input name="host" value="{{ defaults.host }}" required></label>
+        <label>Port<input name="port" value="{{ defaults.port }}" required></label>
+        <label>Database<input name="database" value="{{ defaults.database }}" required></label>
+        <label>Username<input name="username" value="{{ defaults.username }}" required></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password"></label>
+        <label>SSL mode<select name="sslmode"><option>require</option><option>verify-ca</option><option>verify-full</option><option>prefer</option><option>disable</option></select></label>
+        <button class="btn btn-primary" type="submit">Test and save</button>
+      </form>
+    </section>
+    <section class="admin-section">
+      <div class="admin-section-heading"><h2>Saved connections</h2><span>{{ databases|length }} configurations</span></div>
+      <div class="table-wrap admin-table-wrap">
+        <table class="admin-databases-table">
+          <thead><tr><th>Alias</th><th>Host</th><th>Port</th><th>Database</th><th>Username</th><th>Environment</th><th>Update</th></tr></thead>
+          <tbody>
+            {% for database in databases %}
+              <tr><td colspan="7"><form class="database-edit-row" method="post" action="{{ url_for('admin_database_update', database_id=database.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="database_id" value="{{ database.id }}">
+                <label>Alias<input name="database_alias" value="{{ database.databaseAlias }}" required></label>
+                <label>Host<input name="host" value="{{ database.host }}" required></label>
+                <label>Port<input name="port" value="{{ database.port }}" required></label>
+                <label>Database<input name="database" value="{{ database.databaseName }}" required></label>
+                <label>Username<input name="username" value="{{ database.username }}" required></label>
+                <label>New password<input name="password" type="password" autocomplete="new-password" placeholder="Not stored"></label>
+                <label>Environment<select name="environment">{% for environment in ('LOCAL', 'DEVELOPMENT', 'TEST', 'PRODUCTION') %}<option{% if database.environment == environment %} selected{% endif %}>{{ environment }}</option>{% endfor %}</select></label>
+                <label>SSL mode<select name="sslmode"><option{% if database.sslmode == 'require' %} selected{% endif %}>require</option><option{% if database.sslmode == 'verify-ca' %} selected{% endif %}>verify-ca</option><option{% if database.sslmode == 'verify-full' %} selected{% endif %}>verify-full</option><option{% if database.sslmode == 'prefer' %} selected{% endif %}>prefer</option><option{% if database.sslmode == 'disable' %} selected{% endif %}>disable</option></select></label>
+                <button class="btn btn-secondary" type="submit">Test and update</button>
+              </form></td></tr>
+            {% else %}
+              <tr><td colspan="7" class="empty-state">No saved database connections.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

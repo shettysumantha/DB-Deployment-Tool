@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Module Management | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+</head>
+<body class="app-page">
+  {% include 'shared/partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>DBA Operations Platform</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content admin-content">
+    <header class="admin-page-heading"><div><p class="eyebrow accent">CONFIGURATION</p><h1>Module Management</h1></div></header>
+    <p id="moduleNotice" class="notice d-none" role="status"></p>
+    <section class="admin-section">
+      <h2>Register external module</h2>
+      <form id="moduleRegisterForm" class="admin-form">
+        <label>Manifest URL<input name="manifest_url" type="url" required placeholder="https://module.example.com/api/module-manifest"></label>
+        <label>Navigation parent<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}">{{ parent.menu_name }}</option>{% endfor %}</select></label>
+        <label>Display order<input name="display_order" type="number" min="0" value="10"></label>
+        <button id="validateModule" class="btn btn-secondary" type="button">Validate manifest</button>
+        <button id="registerModule" class="btn btn-primary" type="submit" disabled>Register disabled module</button>
+      </form>
+      <pre id="manifestPreview" class="d-none" aria-live="polite"></pre>
+    </section>
+    <section class="admin-section">
+      <div class="admin-section-heading"><h2>Registered modules</h2><span>{{ modules|length }} records</span></div>
+      <div class="table-wrap admin-table-wrap">
+        <table>
+          <thead><tr><th>Module</th><th>Version</th><th>Navigation</th><th>Health</th><th>Enabled</th><th>Actions</th></tr></thead>
+          <tbody>
+            {% for module in modules %}
+              <tr data-module-id="{{ module.module_id }}">
+                <td><strong>{{ module.module_name }}</strong><br><code>{{ module.module_code }}</code><br><small>{{ module.module_type }}</small></td>
+                <td>{{ module.version }}</td>
+                <td>{{ module.parent_menu_name or 'Unassigned' }}<br><small>Order {{ module.display_order }}</small></td>
+                <td><span class="badge-status badge-{{ module.health_status|lower }}">{{ module.health_status }}</span>{% if module.last_health_check_at %}<br><small>{{ module.last_health_check_at.strftime('%Y-%m-%d %H:%M') }}</small>{% endif %}</td>
+                <td>{{ 'Enabled' if module.is_enabled else 'Disabled' }}{% if not module.is_active %}<br><small>De-registered</small>{% endif %}</td>
+                <td>
+                  <div class="row-actions">
+                    {% if module.is_active %}
+                      <button class="btn btn-sm btn-secondary" type="button" data-health>Test health</button>
+                      <button class="btn btn-sm btn-secondary" type="button" data-enabled="{{ 'false' if module.is_enabled else 'true' }}">{{ 'Disable' if module.is_enabled else 'Enable' }}</button>
+                      <button class="btn btn-sm btn-outline-secondary" type="button" data-deregister>De-register</button>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+              {% if module.is_active %}
+                <tr><td colspan="6">
+                  <details>
+                    <summary>Module settings and role permissions</summary>
+                    <form class="admin-form module-edit-form" data-module-id="{{ module.module_id }}">
+                      <label>Module name<input name="module_name" value="{{ module.module_name }}" maxlength="150" required></label>
+                      <label>Description<input name="description" value="{{ module.description }}" maxlength="2000"></label>
+                      <label>Version<input name="version" value="{{ module.version }}" required></label>
+                      <label>Web URL<input name="web_url" value="{{ module.web_url }}" required></label>
+                      <label>API base URL<input name="api_base_url" value="{{ module.api_base_url or '' }}"></label>
+                      <label>Manifest URL<input name="manifest_url" value="{{ module.manifest_url or '' }}" required></label>
+                      <label>Health URL<input name="health_url" value="{{ module.health_url or '' }}" required></label>
+                      <label>Entry path<input name="entry_path" value="{{ module.entry_path }}" required></label>
+                      <label>Icon<input name="icon" value="{{ module.icon }}" required></label>
+                      <label>Navigation parent<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}"{% if parent.menu_id == module.parent_menu_id %} selected{% endif %}>{{ parent.menu_name }}</option>{% endfor %}</select></label>
+                      <label>Display order<input name="display_order" type="number" min="0" value="{{ module.display_order }}"></label>
+                      <button class="btn btn-secondary" type="submit">Save settings</button>
+                    </form>
+                    <div class="module-role-permissions">
+                      {% for permission in permissions[module.module_id] %}
+                        <form class="module-permission-form" data-module-id="{{ module.module_id }}" data-role-id="{{ permission.role_id }}">
+                          <strong>{{ permission.role_name }}</strong>
+                          {% for field in ['can_view', 'can_create', 'can_edit', 'can_delete', 'can_execute'] %}
+                            <label><input type="checkbox" name="{{ field }}"{% if permission[field] %} checked{% endif %}>{{ field[4:]|title }}</label>
+                          {% endfor %}
+                          <button class="btn btn-sm btn-secondary" type="submit">Save grants</button>
+                        </form>
+                      {% endfor %}
+                    </div>
+                  </details>
+                </td></tr>
+              {% endif %}
+            {% else %}
+              <tr><td colspan="6" class="empty-state">No modules are registered.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const csrf = document.querySelector('meta[name="csrf-token"]').content;
+    const notice = document.getElementById('moduleNotice');
+    const showNotice = (message, error = false) => {
+      notice.textContent = message;
+      notice.className = `notice ${error ? 'error' : ''}`;
+      notice.classList.remove('d-none');
+    };
+    const send = async (url, method, body) => {
+      const response = await fetch(url, {
+        method,
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Module request failed.');
+      return data;
+    };
+    const registerForm = document.getElementById('moduleRegisterForm');
+    const registerButton = document.getElementById('registerModule');
+    let validatedManifestUrl = '';
+    document.getElementById('validateModule').addEventListener('click', async () => {
+      try {
+        const manifestUrl = registerForm.elements.manifest_url.value.trim();
+        const result = await send('/api/admin/modules/validate', 'POST', {manifest_url: manifestUrl});
+        validatedManifestUrl = manifestUrl;
+        document.getElementById('manifestPreview').textContent = JSON.stringify(result.manifest, null, 2);
+        document.getElementById('manifestPreview').classList.remove('d-none');
+        registerButton.disabled = false;
+        showNotice('Manifest and health endpoint validated. Registration will remain disabled until an Admin enables it.');
+      } catch (error) {
+        validatedManifestUrl = '';
+        registerButton.disabled = true;
+        showNotice(error.message, true);
+      }
+    });
+    registerForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!validatedManifestUrl || validatedManifestUrl !== registerForm.elements.manifest_url.value.trim()) {
+        showNotice('Validate this manifest URL before registering.', true);
+        return;
+      }
+      try {
+        await send('/api/admin/modules', 'POST', {
+          manifest_url: validatedManifestUrl,
+          parent_menu_id: registerForm.elements.parent_menu_id.value,
+          display_order: registerForm.elements.display_order.value,
+        });
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    });
+    document.querySelectorAll('[data-health]').forEach(button => button.addEventListener('click', async () => {
+      try {
+        const row = button.closest('tr');
+        const result = await send(`/api/admin/modules/${row.dataset.moduleId}/health-check`, 'POST', {});
+        showNotice(`${row.querySelector('code').textContent}: ${result.health_status}. ${result.detail}`);
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    }));
+    document.querySelectorAll('[data-enabled]').forEach(button => button.addEventListener('click', async () => {
+      try {
+        const row = button.closest('tr');
+        await send(`/api/admin/modules/${row.dataset.moduleId}/enabled`, 'PUT', {enabled: button.dataset.enabled === 'true'});
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    }));
+    document.querySelectorAll('[data-deregister]').forEach(button => button.addEventListener('click', async () => {
+      const row = button.closest('tr');
+      if (!confirm(`De-register ${row.querySelector('code').textContent}? This only removes its platform registration.`)) return;
+      try {
+        await send(`/api/admin/modules/${row.dataset.moduleId}`, 'DELETE');
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    }));
+    document.querySelectorAll('.module-edit-form').forEach(form => form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(form));
+      try {
+        await send(`/api/admin/modules/${form.dataset.moduleId}`, 'PUT', payload);
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    }));
+    document.querySelectorAll('.module-permission-form').forEach(form => form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const payload = Object.fromEntries([...form.querySelectorAll('input[type=checkbox]')].map(input => [input.name, input.checked]));
+      try {
+        await send(`/api/admin/modules/${form.dataset.moduleId}/permissions/${form.dataset.roleId}`, 'PUT', payload);
+        showNotice(`Permissions saved for ${form.querySelector('strong').textContent}.`);
+      } catch (error) { showNotice(error.message, true); }
+    }));
+  </script>
+</body>
+</html>
