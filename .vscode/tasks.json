@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Flask app",
+			"type": "shell",
+			"command": "cd /d c:\\DB Deployment Tool\\DB-Deployment-Tool\\deployment_tool\\Script\\postgres_function_deployer && python app.py",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

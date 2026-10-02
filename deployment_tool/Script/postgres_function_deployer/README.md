@@ -1,4 +1,4 @@
-# PostgreSQL Function Deployment Manager
+# DBA Operations Platform
 
 A Flask dashboard for comparing and deploying PostgreSQL functions and tables between a T&D/test database and a Live database. Existing comparison, SQL generation, deployment, backup, registry, history, and notification workflows are preserved.
 
@@ -85,11 +85,27 @@ APP_USER=developer
 APP_DATABASE_URL=
 ```
 
-`APP_DATABASE_URL` is the PostgreSQL database used for saved connection metadata and `tbl_deployment_backup_registry`. When it is set, the backup list and backup metadata are stored there. If it is empty, the registry falls back to the connected Live database for backward compatibility.
+`APP_DATABASE_URL` optionally selects the application PostgreSQL database for authentication, saved connection metadata, and `tbl_deployment_backup_registry`. If it is empty, the application database connection is assembled server-side from `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD`, and optional `PG_SSLMODE`.
+
+The DBA must manually execute `database_security.sql` in PostgreSQL/DB Solo before starting the application. Flask does not execute this script or modify the schema. On startup, the application only checks that `app_security.users` exists. The `init_security.py` helper prints the canonical script location and does not connect to or modify the database:
+
+```powershell
+.\.venv\Scripts\python.exe init_security.py
+```
+
+Set `ADMIN_BOOTSTRAP_PASSKEY` in the ignored local `.env`, then open `/login`, select **Admin Login**, and use **Create Admin Account**. Registration opens at `/admin/register`. The passkey is checked server-side and is not an account password. Bootstrap refuses to create another Admin once an Admin role assignment or `is_admin` flag exists. The command-line `create_admin.py` uses the same one-time passkey flow. Do not configure an Admin password in source code or the example file.
+
+Admins can create users and assign multiple modules from the existing `app_security.menus` list. The database stores assignments in `app_security.user_menu_access`; direct route/API access is checked server-side. Existing users remain role-permission based until an Admin saves explicit module access for them.
+
+Forgot-password reset tokens are stored hashed and expire after 20 minutes. Configure the existing Brevo SMTP variables to deliver reset links. For local development with `FLASK_DEBUG=true`, a reset link is written only to the server log when delivery cannot be used. Password reset responses do not disclose whether an account exists.
+
+The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
 
 ### Database variables
 
-The current workflow also supports saving database metadata through the application's SQLite credential registry. These variables document the established T&D and Live configuration names:
+Saved deployment connection metadata is stored in PostgreSQL using `APP_DATABASE_URL`. Database passwords are not stored there and are never returned by the API. `PG_*` values provide defaults for a matching connection; `PG_PASSWORD` is read only by the server and is never rendered in the page. Source and target passwords may be entered at connection time.
+
+The established T&D and Live-specific environment names remain supported for deployment configuration:
 
 ```env
 TD_DB_HOST=

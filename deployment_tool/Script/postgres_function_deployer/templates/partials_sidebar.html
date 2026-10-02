@@ -1,0 +1,36 @@
+{% macro menu_href(menu) -%}
+  {%- if menu.route_path == '/' -%}/deployment
+  {%- elif menu.route_path and menu.route_path.startswith('/#') -%}/deployment{{ menu.route_path[1:] }}
+  {%- else -%}{{ menu.route_path or '#' }}{%- endif -%}
+{%- endmacro %}
+{% macro render_icon(menu) %}
+  {% set icons = {'database': '▤', 'compare': '⇄', 'settings': '⚙', 'users': '♟', 'shield': '◇', 'menu': '☷', 'lock': '▣', 'deploy': '↥', 'history': '◷', 'backup': '▣'} %}
+  {{ icons.get(menu.icon, '◆') }}
+{% endmacro %}
+{% set hidden_root_menu_codes = ['DASHBOARD', 'DEPLOYMENT_MANAGER', 'DEPLOYMENT_HISTORY', 'BACKUP_REPOSITORY', 'DATABASE_MANAGEMENT'] %}
+{% set hidden_child_menu_codes = ['DEPLOYMENT_MANAGER', 'DEPLOYMENT_HISTORY', 'BACKUP_REPOSITORY'] %}
+{% macro render_menu(menu) %}
+  {% set visible_children = menu.children|rejectattr('menu_code', 'in', hidden_child_menu_codes)|list %}
+  {% if menu.menu_type == 'GROUP' and visible_children %}
+    <div class="sidebar-group">
+      <button class="sidebar-link sidebar-parent" type="button" title="{{ menu.menu_name }}" aria-expanded="true" onclick="this.parentElement.classList.toggle('is-collapsed')">
+        <span class="sidebar-icon" aria-hidden="true">{{ render_icon(menu) }}</span><span class="sidebar-label">{{ menu.menu_name }}</span><span class="sidebar-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div class="sidebar-children">{% for child in visible_children %}{{ render_menu(child) }}{% endfor %}</div>
+    </div>
+  {% elif menu.menu_type == 'EXTERNAL' %}
+    <a class="sidebar-link" href="{{ menu.external_url }}" title="{{ menu.menu_name }}"{% if menu.open_in_new_tab %} target="_blank" rel="noopener noreferrer"{% endif %}>
+      <span class="sidebar-icon" aria-hidden="true">{{ render_icon(menu) }}</span><span class="sidebar-label">{{ menu.menu_name }}</span><span class="sidebar-external" aria-hidden="true">↗</span>
+    </a>
+  {% else %}
+    {% set href = menu_href(menu)|trim %}
+    <a class="sidebar-link{% if request.path == href.split('#')[0] %} active{% endif %}" href="{{ href }}"{% if request.path == href.split('#')[0] %} aria-current="page"{% endif %} title="{{ menu.menu_name }}"><span class="sidebar-icon" aria-hidden="true">{{ render_icon(menu) }}</span><span class="sidebar-label">{{ menu.menu_name }}</span></a>
+  {% endif %}
+{% endmacro %}
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand"><span class="brand-mark">PG</span><div><strong>DBA OPERATIONS</strong><small>PLATFORM</small></div><button class="sidebar-toggle" type="button" aria-label="Collapse navigation" title="Collapse navigation" onclick="const collapsed = document.body.classList.toggle('sidebar-collapsed'); this.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation'); this.title = collapsed ? 'Expand navigation' : 'Collapse navigation';">‹</button></div>
+  <a class="sidebar-link sidebar-home{% if request.path in ['/', '/dashboard'] %} active{% endif %}" href="/" title="Home"{% if request.path in ['/', '/dashboard'] %} aria-current="page"{% endif %}><span class="sidebar-icon">⌂</span><span>Home</span></a>
+  <a class="sidebar-link{% if request.path == '/profile' or request.path == '/profile/password' %} active{% endif %}" href="/profile" title="Profile"><span class="sidebar-icon">◎</span><span>Profile</span></a>
+  <nav aria-label="Application navigation">{% for menu in sidebar_menus if menu.menu_code not in hidden_root_menu_codes %}{{ render_menu(menu) }}{% endfor %}</nav>
+  <div class="sidebar-user"><span>{{ session.get('username') }}</span><small>{{ current_roles|join(' / ') }}</small><form method="post" action="{{ url_for('logout_route') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="sidebar-link" type="submit" title="Sign out"><span class="sidebar-icon">↪</span><span>Sign out</span></button></form></div>
+</aside>

@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 SERVICES_DIR = Path(__file__).resolve().parent
 DEPLOYER_DIR = SERVICES_DIR.parent
 ENV_FILE = DEPLOYER_DIR / ".env"
-load_dotenv(dotenv_path=ENV_FILE, override=True)
+load_dotenv(dotenv_path=ENV_FILE, override=False)
 
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 
@@ -133,6 +133,15 @@ def _send_email_with_smtp(subject, body, recipients, attachments=None):
         server.sendmail(from_email, recipients, message.as_string())
 
     return True
+
+
+def send_password_reset_email(recipient, reset_url):
+    body = (
+        "A password reset was requested for your DBA Operations Platform account.\n\n"
+        f"Use this one-time link within 20 minutes:\n{reset_url}\n\n"
+        "If you did not request this, you can ignore this message."
+    )
+    return _send_email_with_smtp("DBA Operations Platform password reset", body, [recipient])
 
 
 def _send_mobile_notification(webhook, mobile_to, body):

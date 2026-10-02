@@ -11,7 +11,11 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const json = async (url, options = {}) => {
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": document.querySelector('meta[name="csrf-token"]')?.content || "",
+      ...(options.headers || {}),
+    },
     ...options,
   });
   const data = await response.json();
@@ -79,7 +83,10 @@ function renderResults() {
       const objectName = item.objectType === "TABLE" ? item.key : item.name;
       const actionLabel = "View Changes";
       const signature = item.objectType === "FUNCTION" ? `<span class="signature object-signature">${escapeHtml(item.signature)}</span>` : "";
-      return `<tr><td><input aria-label="Select ${escapeHtml(objectName)}" class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}></td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${escapeHtml(objectName)}${signature}</button></td><td><span class="object-type object-type-${item.objectType.toLowerCase()}">${item.objectType}</span></td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${actionLabel}</button>${deployable ? `<button data-deploy="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">Move to Live</button>` : ""}</div></td></tr>`;
+      const deploymentAction = deployable && document.body.dataset.canDeploy === "true"
+        ? `<button data-deploy="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">Move to Live</button>`
+        : "";
+      return `<tr><td><input aria-label="Select ${escapeHtml(objectName)}" class="row-check" type="checkbox" data-key="${encodeURIComponent(item.key)}" ${item.selected ? "checked" : ""}></td><td><button class="fn-name function-link" type="button" data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${escapeHtml(objectName)}${signature}</button></td><td><span class="object-type object-type-${item.objectType.toLowerCase()}">${item.objectType}</span></td><td><span class="badge-status badge-${item.status.replace(" ", "-")}">${item.status}</span></td><td><div class="row-actions"><button data-diff="${encodeURIComponent(item.key)}" data-object-type="${item.objectType}">${actionLabel}</button>${deploymentAction}</div></td></tr>`;
     })
     .join("");
   body.querySelectorAll(".row-check").forEach((el) =>
@@ -131,7 +138,7 @@ function setCredentialMode(form, record, editing = false) {
     if (record && !editing)
       field.value = record[{ database: "databaseName" }[name] || name];
     if (!record) {
-      field.value = name === "port" ? "5432" : "";
+      field.value = field.dataset.default || (name === "port" ? "5432" : "");
     }
     field.readOnly = existing && !editing;
     field.required = true;

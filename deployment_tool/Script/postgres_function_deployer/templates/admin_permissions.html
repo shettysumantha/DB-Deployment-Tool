@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Role Permissions | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=enterprise3">
+</head>
+<body class="app-page">
+  {% include 'partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>DBA Operations Platform</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content admin-content">
+    <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Role Permissions</h1></div></header>
+    <div id="permissionNotice" class="notice d-none" role="status"></div>
+    {% for role in roles %}
+      <details class="permission-role">
+        <summary><strong>{{ role.role_name }}</strong><span>{{ role.role_description or 'Role permissions' }}</span></summary>
+        <form class="permission-form" data-role-id="{{ role.role_id }}">
+          <div class="table-wrap admin-table-wrap">
+            <table>
+              <thead><tr><th>Module</th><th>View</th><th>Create</th><th>Edit</th><th>Delete</th><th>Execute</th></tr></thead>
+              <tbody>
+                {% for item in permissions[role.role_id] %}
+                  <tr><td>{{ item.menu_name }}</td>
+                    {% for permission in ('can_view', 'can_create', 'can_edit', 'can_delete', 'can_execute') %}
+                      <td><input class="permission-check" type="checkbox" data-menu-id="{{ item.menu_id }}" data-permission="{{ permission }}" aria-label="{{ permission }} {{ item.menu_name }}"{% if item[permission] %} checked{% endif %}></td>
+                    {% endfor %}
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <button class="btn btn-primary" type="submit">Save {{ role.role_name }} permissions</button>
+        </form>
+      </details>
+    {% endfor %}
+  </main>
+  <script>
+    document.querySelectorAll('.permission-form').forEach(form => form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const grouped = new Map();
+      form.querySelectorAll('.permission-check').forEach(input => {
+        const menuId = input.dataset.menuId;
+        if (!grouped.has(menuId)) grouped.set(menuId, { menu_id: Number(menuId) });
+        grouped.get(menuId)[input.dataset.permission] = input.checked;
+      });
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      const notice = document.getElementById('permissionNotice');
+      try {
+        const response = await fetch(`/api/admin/permissions/${form.dataset.roleId}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content },
+          body: JSON.stringify(Array.from(grouped.values()))
+        });
+        if (!response.ok) throw new Error('Unable to save permissions.');
+        notice.textContent = 'Role permissions saved.';
+        notice.className = 'notice';
+      } catch (error) {
+        notice.textContent = error.message;
+        notice.className = 'notice error';
+      } finally {
+        button.disabled = false;
+      }
+    }));
+  </script>
+</body>
+</html>
