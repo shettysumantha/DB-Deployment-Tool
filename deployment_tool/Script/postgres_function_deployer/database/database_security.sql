@@ -140,10 +140,10 @@ CREATE TABLE IF NOT EXISTS app_security.modules (
         (module_type = 'INTERNAL' AND web_url LIKE '/%' AND web_url NOT LIKE '//%')
         OR (module_type = 'EXTERNAL' AND web_url ~ '^https://')
     ),
-    CHECK (
+    CONSTRAINT modules_optional_external_api_urls_check CHECK (
         module_type = 'INTERNAL'
-        OR (manifest_url IS NOT NULL AND manifest_url ~ '^https://'
-            AND health_url IS NOT NULL AND health_url ~ '^https://')
+        OR ((manifest_url IS NULL OR manifest_url ~ '^https://')
+            AND (health_url IS NULL OR health_url ~ '^https://'))
     ),
     CHECK (
         api_base_url IS NULL
@@ -154,6 +154,33 @@ CREATE TABLE IF NOT EXISTS app_security.modules (
     CHECK (icon ~ '^[A-Za-z0-9_-]{1,50}$'),
     CHECK (entry_path LIKE '/%' AND entry_path NOT LIKE '//%')
 );
+DO $$
+DECLARE
+    old_constraint RECORD;
+BEGIN
+    FOR old_constraint IN
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'app_security.modules'::regclass
+          AND contype = 'c'
+          AND pg_get_constraintdef(oid) LIKE '%manifest_url IS NOT NULL%'
+    LOOP
+        EXECUTE format('ALTER TABLE app_security.modules DROP CONSTRAINT %I', old_constraint.conname);
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'app_security.modules'::regclass
+          AND conname = 'modules_optional_external_api_urls_check'
+    ) THEN
+        ALTER TABLE app_security.modules
+            ADD CONSTRAINT modules_optional_external_api_urls_check CHECK (
+                module_type = 'INTERNAL'
+                OR ((manifest_url IS NULL OR manifest_url ~ '^https://')
+                    AND (health_url IS NULL OR health_url ~ '^https://'))
+            );
+    END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS app_security.role_module_permissions (
     role_id BIGINT NOT NULL REFERENCES app_security.roles(role_id) ON DELETE CASCADE,
     module_id BIGINT NOT NULL REFERENCES app_security.modules(module_id) ON DELETE CASCADE,

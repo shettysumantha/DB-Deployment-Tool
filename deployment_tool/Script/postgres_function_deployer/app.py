@@ -12,7 +12,7 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
 from core.database.db_service import clean_config, safe_error, test_connection
-from core.module_registry.module_service import check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_manifest
+from core.module_registry.module_service import check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
 from core.security.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
 from modules.database_management.credential_service import connection_config, get_database, list_databases, save_database, update_database
 from modules.db_compare.services.backup_service import create_backup, safe_backup_path
@@ -736,7 +736,8 @@ def validate_module_manifest_api():
     require_permission("MODULE_MANAGEMENT", "can_create")
     try:
         payload = request.get_json(silent=True) or {}
-        return jsonify({"manifest": validate_manifest(payload.get("manifest_url", ""))})
+        module = validate_module_registration(payload)
+        return jsonify({"manifest": module, "validation_mode": module["validation_mode"]})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -746,7 +747,7 @@ def register_module_api():
     require_permission("MODULE_MANAGEMENT", "can_create")
     try:
         payload = request.get_json(silent=True) or {}
-        manifest = validate_manifest(payload.get("manifest_url", ""))
+        manifest = validate_module_registration(payload)
         parent_menu_id = int(payload.get("parent_menu_id", 0))
         if parent_menu_id not in {item["menu_id"] for item in list_parent_menus()}:
             raise ValueError("Choose an active navigation group.")

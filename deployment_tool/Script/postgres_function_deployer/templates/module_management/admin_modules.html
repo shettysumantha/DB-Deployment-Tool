@@ -21,10 +21,13 @@
     <section class="admin-section">
       <h2>Register external module</h2>
       <form id="moduleRegisterForm" class="admin-form">
-        <label>Manifest URL<input name="manifest_url" type="url" required placeholder="https://module.example.com/api/module-manifest"></label>
+        <label>Web URL<input name="web_url" type="url" placeholder="https://module.example.com/"></label>
+        <label>API Base URL (Optional)<input name="api_base_url" type="url" placeholder="https://module.example.com/api"></label>
+        <label>Manifest URL (Optional)<input name="manifest_url" type="url" placeholder="https://module.example.com/api/module-manifest"></label>
+        <label>Health URL (Optional)<input name="health_url" type="url" placeholder="https://module.example.com/api/health"></label>
         <label>Navigation parent<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}">{{ parent.menu_name }}</option>{% endfor %}</select></label>
         <label>Display order<input name="display_order" type="number" min="0" value="10"></label>
-        <button id="validateModule" class="btn btn-secondary" type="button">Validate manifest</button>
+        <button id="validateModule" class="btn btn-secondary" type="button">Validate module</button>
         <button id="registerModule" class="btn btn-primary" type="submit" disabled>Register disabled module</button>
       </form>
       <pre id="manifestPreview" class="d-none" aria-live="polite"></pre>
@@ -61,9 +64,9 @@
                       <label>Description<input name="description" value="{{ module.description }}" maxlength="2000"></label>
                       <label>Version<input name="version" value="{{ module.version }}" required></label>
                       <label>Web URL<input name="web_url" value="{{ module.web_url }}" required></label>
-                      <label>API base URL<input name="api_base_url" value="{{ module.api_base_url or '' }}"></label>
-                      <label>Manifest URL<input name="manifest_url" value="{{ module.manifest_url or '' }}" required></label>
-                      <label>Health URL<input name="health_url" value="{{ module.health_url or '' }}" required></label>
+                      <label>API Base URL (Optional)<input name="api_base_url" value="{{ module.api_base_url or '' }}"></label>
+                      <label>Manifest URL (Optional)<input name="manifest_url" value="{{ module.manifest_url or '' }}"></label>
+                      <label>Health URL (Optional)<input name="health_url" value="{{ module.health_url or '' }}"></label>
                       <label>Entry path<input name="entry_path" value="{{ module.entry_path }}" required></label>
                       <label>Icon<input name="icon" value="{{ module.icon }}" required></label>
                       <label>Navigation parent<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}"{% if parent.menu_id == module.parent_menu_id %} selected{% endif %}>{{ parent.menu_name }}</option>{% endfor %}</select></label>
@@ -112,31 +115,40 @@
     };
     const registerForm = document.getElementById('moduleRegisterForm');
     const registerButton = document.getElementById('registerModule');
-    let validatedManifestUrl = '';
+    const endpointPayload = () => ({
+      web_url: registerForm.elements.web_url.value.trim(),
+      api_base_url: registerForm.elements.api_base_url.value.trim(),
+      manifest_url: registerForm.elements.manifest_url.value.trim(),
+      health_url: registerForm.elements.health_url.value.trim(),
+    });
+    let validatedEndpoints = '';
     document.getElementById('validateModule').addEventListener('click', async () => {
       try {
-        const manifestUrl = registerForm.elements.manifest_url.value.trim();
-        const result = await send('/api/admin/modules/validate', 'POST', {manifest_url: manifestUrl});
-        validatedManifestUrl = manifestUrl;
+        const endpoints = endpointPayload();
+        const result = await send('/api/admin/modules/validate', 'POST', endpoints);
+        validatedEndpoints = JSON.stringify(endpoints);
         document.getElementById('manifestPreview').textContent = JSON.stringify(result.manifest, null, 2);
         document.getElementById('manifestPreview').classList.remove('d-none');
         registerButton.disabled = false;
-        showNotice('Manifest and health endpoint validated. Registration will remain disabled until an Admin enables it.');
+        showNotice(result.validation_mode === 'web-only'
+          ? 'Valid web-only module. Registration will remain disabled until an Admin enables it.'
+          : 'Module endpoints validated. Registration will remain disabled until an Admin enables it.');
       } catch (error) {
-        validatedManifestUrl = '';
+        validatedEndpoints = '';
         registerButton.disabled = true;
         showNotice(error.message, true);
       }
     });
     registerForm.addEventListener('submit', async event => {
       event.preventDefault();
-      if (!validatedManifestUrl || validatedManifestUrl !== registerForm.elements.manifest_url.value.trim()) {
-        showNotice('Validate this manifest URL before registering.', true);
+      const endpoints = endpointPayload();
+      if (!validatedEndpoints || validatedEndpoints !== JSON.stringify(endpoints)) {
+        showNotice('Validate the module URLs before registering.', true);
         return;
       }
       try {
         await send('/api/admin/modules', 'POST', {
-          manifest_url: validatedManifestUrl,
+          ...endpoints,
           parent_menu_id: registerForm.elements.parent_menu_id.value,
           display_order: registerForm.elements.display_order.value,
         });

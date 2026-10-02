@@ -105,7 +105,7 @@ def _validate_internal_path(value, field_name, allow_empty=False):
     return path
 
 
-def _fetch_json(url, *, expected_code=None):
+def _fetch_json(url, *, expected_code=None, endpoint_name="Module endpoint"):
     _, parsed, port, addresses = _resolve_safe_url(url, "URL")
     connection = _PinnedHTTPSConnection(parsed.hostname, port, str(addresses[0]), timeout=5)
     request_target = parsed.path or "/"
@@ -129,36 +129,83 @@ def _fetch_json(url, *, expected_code=None):
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Module endpoint must return a JSON object.") from exc
+        if endpoint_name == "API endpoint":
+            raise ValueError("API endpoint validation failed: expected JSON.") from exc
+        raise ValueError(f"{endpoint_name} must return a JSON object.") from exc
     if not isinstance(data, dict):
-        raise ValueError("Module endpoint must return a JSON object.")
+        if endpoint_name == "API endpoint":
+            raise ValueError("API endpoint validation failed: expected JSON.")
+        raise ValueError(f"{endpoint_name} must return a JSON object.")
     if expected_code and data.get("module_code") != expected_code:
         raise ValueError("Module health response has the wrong module_code.")
     return data
 
 
-def validate_manifest(manifest_url):
-    manifest_url = _validate_url(manifest_url, "Manifest URL")
-    manifest = _fetch_json(manifest_url)
-    code = str(manifest.get("module_code", "")).strip()
-    name = str(manifest.get("module_name", "")).strip()
-    version = str(manifest.get("version", "")).strip()
+def _default_module_identity(source_url):
+    host_label = (urlsplit(source_url).hostname or "external-module").split(".")[0]
+    code = re.sub(r"[^A-Z0-9]+", "_", host_label.upper()).strip("_")
+    if not code or not code[0].isalpha():
+        code = f"MODULE_{code}"
+    if len(code) < 2:
+        code = f"{code}_MODULE"
+    code = code[:100].rstrip("_")
+    name = re.sub(r"[-_]+", " ", host_label).strip().title() or "External Module"
+    return code, name[:150]
+
+
+def validate_module_registration(payload):
+    payload = payload or {}
+    web_url = str(payload.get("web_url", "")).strip()
+    api_base_url = str(payload.get("api_base_url", "")).strip()
+    manifest_url = str(payload.get("manifest_url", "")).strip()
+    health_url = str(payload.get("health_url", "")).strip()
+    if not any((web_url, api_base_url, manifest_url)):
+        raise ValueError("A web URL or API endpoint is required.")
+
+    web_url = _validate_url(web_url, "Module web_url") if web_url else None
+    api_base_url = _validate_url(api_base_url, "Module api_base_url") if api_base_url else None
+    manifest_url = _validate_url(manifest_url, "Manifest URL") if manifest_url else None
+    health_url = _validate_url(health_url, "Module health_url") if health_url else None
+
+    has_manifest = bool(manifest_url)
+    if has_manifest:
+        manifest = _fetch_json(manifest_url, endpoint_name="Manifest endpoint")
+    elif api_base_url:
+        manifest = _fetch_json(api_base_url, endpoint_name="API endpoint")
+    else:
+        manifest = {}
+
+    api_base_url = api_base_url or manifest.get("api_base_url")
+    if api_base_url:
+        api_base_url = _validate_url(api_base_url, "Module api_base_url")
+    health_url = health_url or manifest.get("health_url")
+    if health_url:
+        health_url = _validate_url(health_url, "Module health_url")
+
+    candidate_web_url = web_url or manifest.get("web_url") or api_base_url or manifest_url
+    if not candidate_web_url:
+        raise ValueError("A web URL or API endpoint is required.")
+    web_url = web_url or _validate_url(candidate_web_url, "Module web_url")
+
+    default_code, default_name = _default_module_identity(web_url)
+    code = str(manifest.get("module_code") or ("" if has_manifest else default_code)).strip()
+    name = str(manifest.get("module_name") or ("" if has_manifest else default_name)).strip()
+    version = str(manifest.get("version") or ("" if has_manifest else "1.0.0")).strip()
     if not MODULE_CODE_PATTERN.fullmatch(code):
         raise ValueError("Manifest module_code must use uppercase letters, digits, and underscores.")
     if not name or len(name) > 150:
         raise ValueError("Manifest module_name is required and must be 150 characters or fewer.")
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("Manifest version must use semantic version format, such as 1.0.0.")
-    web_url = _validate_url(manifest.get("web_url"), "Module web_url")
-    api_base_url = manifest.get("api_base_url")
-    if api_base_url:
-        api_base_url = _validate_url(api_base_url, "Module api_base_url")
-    health_url = _validate_url(manifest.get("health_url"), "Module health_url")
-    health = _fetch_json(health_url, expected_code=code)
-    if health.get("module_code") != code:
-        raise ValueError("Module health response has the wrong module_code.")
-    if health.get("status") != "UP" or health.get("version") != version:
-        raise ValueError("Module health endpoint must report status UP and the manifest version.")
+
+    health = None
+    if health_url:
+        health = _fetch_json(health_url, expected_code=code, endpoint_name="Health endpoint")
+        if health.get("module_code") != code:
+            raise ValueError("Module health response has the wrong module_code.")
+        if health.get("status") != "UP" or health.get("version") != version:
+            raise ValueError("Module health endpoint must report status UP and the registered version.")
+
     entry_path = _validate_entry_path(manifest.get("entry_path", "/"))
     icon = str(manifest.get("icon", "database")).strip()
     if not ICON_PATTERN.fullmatch(icon):
@@ -178,7 +225,13 @@ def validate_manifest(manifest_url):
         "entry_path": entry_path,
         "icon": icon,
         "capabilities": capabilities,
+        "health_status": "UP" if health else "UNKNOWN",
+        "validation_mode": "api-enabled" if api_base_url or manifest_url or health_url else "web-only",
     }
+
+
+def validate_manifest(manifest_url):
+    return validate_module_registration({"manifest_url": manifest_url})
 
 
 def register_module(manifest, actor_id, parent_menu_id, display_order=0):
@@ -191,13 +244,16 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
                         entry_path, icon, parent_menu_id, display_order,
                         health_status, last_health_check_at, capabilities, created_by)
                         VALUES (%s, %s, %s, %s, 'EXTERNAL', FALSE, %s, %s, %s, %s,
-                            %s, %s, %s, %s, 'UP', CURRENT_TIMESTAMP, %s, %s)
+                            %s, %s, %s, %s, %s,
+                            CASE WHEN %s = 'UP' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                            %s, %s)
                     RETURNING {MODULE_COLUMNS}""",
                 (
                     manifest["module_code"], manifest["module_name"], manifest["description"],
                     manifest["version"], manifest["web_url"], manifest["api_base_url"],
                     manifest["manifest_url"], manifest["health_url"], manifest["entry_path"],
                     manifest["icon"], parent_menu_id, max(0, int(display_order)),
+                    manifest.get("health_status", "UNKNOWN"), manifest.get("health_status", "UNKNOWN"),
                     Json(manifest["capabilities"]), actor_id,
                 ),
             )
@@ -371,10 +427,14 @@ def update_module(module_id, payload, actor_id):
         manifest_url = _validate_internal_path(manifest_url, "Manifest URL")
         health_url = _validate_internal_path(health_url, "Module health_url")
     else:
-        web_url = _validate_url(web_url, "Module web_url")
+        web_url = _validate_url(web_url, "Module web_url") if web_url else None
         api_base_url = _validate_url(api_base_url, "Module api_base_url") if api_base_url else None
-        manifest_url = _validate_url(manifest_url, "Manifest URL")
-        health_url = _validate_url(health_url, "Module health_url")
+        manifest_url = _validate_url(manifest_url, "Manifest URL") if manifest_url else None
+        health_url = _validate_url(health_url, "Module health_url") if health_url else None
+        if not web_url:
+            web_url = api_base_url or manifest_url
+        if not web_url:
+            raise ValueError("A web URL or API endpoint is required.")
     entry_path = _validate_entry_path(payload.get("entry_path", "/"))
     version = str(payload.get("version", "")).strip()
     if not VERSION_PATTERN.fullmatch(version):
@@ -492,13 +552,17 @@ def check_module_health(module_id, actor_id):
             module = cur.fetchone()
     if not module:
         raise ValueError("Module was not found or has been de-registered.")
-    status = "DOWN"
-    detail = "Health endpoint is unavailable."
+    status = "UNKNOWN"
+    detail = "No health endpoint is configured."
     if module["module_type"] == "INTERNAL":
         status, detail = "UP", "Platform-hosted module is responding to the health-check request."
-    else:
+    elif module["health_url"]:
+        status, detail = "DOWN", "Health endpoint is unavailable."
         try:
-            health = _fetch_json(module["health_url"], expected_code=module["module_code"])
+            health = _fetch_json(
+                module["health_url"], expected_code=module["module_code"],
+                endpoint_name="Health endpoint",
+            )
             if health.get("status") == "UP" and health.get("version") == module["version"]:
                 status, detail = "UP", "Module is healthy and reports the registered version."
             elif health.get("version") != module["version"]:
