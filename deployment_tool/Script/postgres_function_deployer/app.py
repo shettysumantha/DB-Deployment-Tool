@@ -6,22 +6,24 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urljoin
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
 
-from config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
-from services.comparison_service import compare_functions
-from services.db_service import clean_config, safe_error, test_connection
-from services.deployment_service import deploy_records
-from services.function_service import parse_expected
-from services.table_service import _signature as table_signature, compare_tables, fetch_selected as fetch_tables, fetch_table_names, parse_expected as parse_table_names
-from services.table_deployment_service import deploy_tables, generate_table_script
-from services.backup_service import create_backup, safe_backup_path
-from services.registry_service import application_database_configured, ensure_registry, insert_backup, search_backups, update_status
-from services.sql_generator import generate_script
-from services.credential_service import connection_config, get_database, list_databases, save_database, update_database
-from services.notification_service import send_deployment_notification
-from services.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
+from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
+from core.database.db_service import clean_config, safe_error, test_connection
+from core.module_registry.module_service import check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_manifest
+from core.security.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
+from modules.database_management.credential_service import connection_config, get_database, list_databases, save_database, update_database
+from modules.db_compare.services.backup_service import create_backup, safe_backup_path
+from modules.db_compare.services.comparison_service import compare_functions
+from modules.db_compare.services.deployment_service import deploy_records
+from modules.db_compare.services.function_service import parse_expected
+from modules.db_compare.services.notification_service import send_deployment_notification
+from modules.db_compare.services.registry_service import application_database_configured, ensure_registry, insert_backup, search_backups, update_status
+from modules.db_compare.services.sql_generator import generate_script
+from modules.db_compare.services.table_deployment_service import deploy_tables, generate_table_script
+from modules.db_compare.services.table_service import _signature as table_signature, compare_tables, fetch_selected as fetch_tables, fetch_table_names, parse_expected as parse_table_names
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
@@ -82,12 +84,12 @@ def clear_bootstrap_failures(remote_addr):
 def forbidden(_error):
     if request.path.startswith("/api/"):
         return jsonify({"error": "Access denied."}), 403
-    return render_template("error.html", code=403, title="Access Denied", message="You do not have permission to access this page."), 403
+    return render_template("shared/error.html", code=403, title="Access Denied", message="You do not have permission to access this page."), 403
 
 
 @app.errorhandler(404)
 def not_found(_error):
-    return render_template("error.html", code=404, title="Page Not Found", message="The requested page could not be found."), 404
+    return render_template("shared/error.html", code=404, title="Page Not Found", message="The requested page could not be found."), 404
 
 
 # @app.before_request
@@ -115,7 +117,7 @@ def enforce_login():
         if not expected or not supplied or not secrets.compare_digest(expected, supplied):
             abort(400)
 
-    if request.path in {"/login", "/admin/bootstrap", "/admin/register", "/forgot-password"} or request.path.startswith("/reset-password/"):
+    if request.path in {"/login", "/admin/bootstrap", "/admin/register", "/forgot-password", "/api/module-manifest"} or request.path.startswith("/reset-password/"):
         return None
 
     if not session.get("user_id"):
@@ -165,7 +167,7 @@ def login():
 
     message = "Password changed successfully. Please login." if request.args.get("changed") else None
     return render_template(
-        "login.html",
+        "authentication/login.html",
         **login_page_context(
             admin_login_checked=request.args.get("admin") == "1",
             show_admin_access=request.args.get("admin") == "1",
@@ -213,7 +215,7 @@ def login_submit():
     if user and user.get("admin_access_denied"):
         record_failed_login(identifier)
         return render_template(
-            "login.html",
+            "authentication/login.html",
             error="This account does not have Admin access.",
             **login_page_context(admin_login_checked=True, show_admin_access=True, login_identifier=identifier),
         ), 403
@@ -235,7 +237,7 @@ def login_submit():
     record_failed_login(identifier)
 
     return render_template(
-        "login.html",
+        "authentication/login.html",
         error="Invalid username or password.",
         **login_page_context(admin_login_checked=admin_login, show_admin_access=admin_login, login_identifier=identifier),
     ), 401
@@ -253,7 +255,7 @@ def admin_bootstrap():
     def registration_response(message=None, field=None, status=400, *, already_exists=False, success=None):
         field_errors = {field: message} if field else {}
         return render_template(
-            "admin_register.html",
+            "authentication/admin_register.html",
             error=None if field else message,
             success=success,
             already_exists=already_exists,
@@ -267,7 +269,7 @@ def admin_bootstrap():
         app.logger.exception("Admin registration database check failed for local authentication database")
         return registration_response("Unable to connect to the local authentication database.", status=503)
     if request.method == "GET":
-        return render_template("admin_register.html", values={}, field_errors={})
+        return render_template("authentication/admin_register.html", values={}, field_errors={})
 
     remote_addr = request.remote_addr or "unknown"
     if bootstrap_rate_limited(remote_addr):
@@ -313,7 +315,7 @@ def admin_bootstrap():
         create_bootstrap_admin(data, ADMIN_BOOTSTRAP_PASSKEY)
         clear_bootstrap_failures(remote_addr)
         return render_template(
-            "admin_register.html",
+            "authentication/admin_register.html",
             success="Admin account created successfully. Please login.",
             login_url=url_for("login", admin="1"),
             values=values,
@@ -337,7 +339,7 @@ def forgot_password():
             if reset and reset["token"]:
                 reset_url = url_for("reset_password", token=reset["token"], _external=True)
                 if reset["email"]:
-                    from services.notification_service import send_password_reset_email
+                    from modules.db_compare.services.notification_service import send_password_reset_email
                     try:
                         send_password_reset_email(reset["email"], reset_url)
                     except Exception:
@@ -349,8 +351,8 @@ def forgot_password():
                     app.logger.info("Development password reset URL: %s", reset_url)
         except Exception:
             app.logger.exception("Password reset request failed")
-        return render_template("forgot_password.html", message="If the account exists, password reset instructions have been provided.")
-    return render_template("forgot_password.html")
+        return render_template("authentication/forgot_password.html", message="If the account exists, password reset instructions have been provided.")
+    return render_template("authentication/forgot_password.html")
 
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
@@ -358,21 +360,21 @@ def reset_password(token):
     if request.method == "POST":
         password = request.form.get("password", "")
         if password != request.form.get("confirm_password", ""):
-            return render_template("reset_password.html", token=token, error="Passwords do not match."), 400
+            return render_template("authentication/reset_password.html", token=token, error="Passwords do not match."), 400
         try:
             if complete_password_reset(token, password):
-                return render_template("login.html", success="Password reset successfully. Please login.")
+                return render_template("authentication/login.html", success="Password reset successfully. Please login.")
         except ValueError as exc:
-            return render_template("reset_password.html", token=token, error=str(exc)), 400
+            return render_template("authentication/reset_password.html", token=token, error=str(exc)), 400
         except Exception:
             app.logger.exception("Password reset completion failed")
-        return render_template("reset_password.html", token=token, error="This reset link is invalid or expired."), 400
-    return render_template("reset_password.html", token=token)
+        return render_template("authentication/reset_password.html", token=token, error="This reset link is invalid or expired."), 400
+    return render_template("authentication/reset_password.html", token=token)
 
 
 @app.get("/profile")
 def profile():
-    return render_template("profile.html")
+    return render_template("authentication/profile.html")
 
 
 @app.route("/profile/password", methods=["GET", "POST"])
@@ -380,18 +382,18 @@ def profile_password():
     if request.method == "POST":
         password = request.form.get("new_password", "")
         if password != request.form.get("confirm_password", ""):
-            return render_template("profile.html", error="New passwords do not match."), 400
+            return render_template("authentication/profile.html", error="New passwords do not match."), 400
         try:
             if not change_password(session["user_id"], request.form.get("current_password", ""), password):
-                return render_template("profile.html", error="Current password is incorrect."), 400
+                return render_template("authentication/profile.html", error="Current password is incorrect."), 400
             session.clear()
             return redirect(url_for("login", changed="1"))
         except ValueError as exc:
-            return render_template("profile.html", error=str(exc)), 400
+            return render_template("authentication/profile.html", error=str(exc)), 400
         except Exception:
             app.logger.exception("Password change failed")
-            return render_template("profile.html", error="Unable to change password."), 400
-    return render_template("profile.html")
+            return render_template("authentication/profile.html", error="Unable to change password."), 400
+    return render_template("authentication/profile.html")
 
 @app.post("/logout")
 def logout_route():
@@ -407,18 +409,24 @@ def logout_route():
 @app.get("/")
 @app.get("/dashboard")
 def dashboard():
-    return render_template("dashboard.html")
+    return render_template("shared/dashboard.html")
 
 
 def require_permission(menu_code, permission="can_view"):
-    if menu_code in {"USER_MANAGEMENT", "ROLE_MANAGEMENT", "ROLE_PERMISSIONS", "MENU_MANAGEMENT", "DATABASE_MANAGEMENT"} and not user_has_role(session["user_id"], "ADMIN"):
+    if menu_code in {"USER_MANAGEMENT", "ROLE_MANAGEMENT", "ROLE_PERMISSIONS", "MENU_MANAGEMENT", "DATABASE_MANAGEMENT", "MODULE_MANAGEMENT"} and not user_has_role(session["user_id"], "ADMIN"):
         abort(403)
-    if not has_permission(session["user_id"], menu_code, permission):
+    if not _permission_granted(menu_code, permission):
         abort(403)
+
+
+def _permission_granted(menu_code, permission="can_view"):
+    if menu_code in {"COMPARISON_RESULTS", "DEPLOYMENT_MANAGER", "DEPLOYMENT_HISTORY", "BACKUP_REPOSITORY"}:
+        return module_permission(session["user_id"], "DB_COMPARE", permission)
+    return has_permission(session["user_id"], menu_code, permission)
 
 
 def require_any_permission(*menu_codes, permission="can_view"):
-    if not any(has_permission(session["user_id"], code, permission) for code in menu_codes):
+    if not any(_permission_granted(code, permission) for code in menu_codes):
         abort(403)
 
 
@@ -430,7 +438,7 @@ def menus_api():
 @app.get("/admin/menus")
 def admin_menus():
     require_permission("MENU_MANAGEMENT")
-    return render_template("admin_menus.html", menus=list_menus())
+    return render_template("menu_management/admin_menus.html", menus=list_menus())
 
 
 @app.get("/api/admin/menus")
@@ -472,7 +480,7 @@ def admin_users():
     users = list_users(page_size + 1, (page - 1) * page_size)
     has_next = len(users) > page_size
     return render_template(
-        "admin_users.html", users=users[:page_size], roles=list_roles(), modules=list_modules(),
+        "user_management/admin_users.html", users=users[:page_size], roles=list_roles(), modules=list_modules(),
         page=page, page_size=page_size, has_next=has_next,
     )
 
@@ -571,7 +579,7 @@ def admin_user_password_reset(user_id):
             if reset and reset["token"]:
                 reset_url = url_for("reset_password", token=reset["token"], _external=True)
                 if reset["email"]:
-                    from services.notification_service import send_password_reset_email
+                    from modules.db_compare.services.notification_service import send_password_reset_email
                     send_password_reset_email(reset["email"], reset_url)
                 elif DEBUG:
                     app.logger.info("Development password reset URL: %s", reset_url)
@@ -585,7 +593,7 @@ def admin_user_password_reset(user_id):
 @app.get("/admin/roles")
 def admin_roles():
     require_permission("ROLE_MANAGEMENT")
-    return render_template("admin_roles.html", roles=list_roles(), menus=list_menus())
+    return render_template("role_management/admin_roles.html", roles=list_roles(), menus=list_menus())
 
 
 @app.get("/api/admin/roles")
@@ -633,7 +641,7 @@ def admin_role_update_form(role_id):
 @app.get("/admin/databases")
 def admin_databases():
     require_permission("DATABASE_MANAGEMENT")
-    return render_template("admin_databases.html", databases=list_databases(), defaults=PG_DEFAULTS)
+    return render_template("database_management/admin_databases.html", databases=list_databases(), defaults=PG_DEFAULTS)
 
 
 @app.post("/admin/databases/create")
@@ -672,7 +680,7 @@ def admin_permissions():
     require_permission("ROLE_PERMISSIONS")
     roles = list_roles()
     permissions = {role["role_id"]: list_role_permissions(role["role_id"]) for role in roles}
-    return render_template("admin_permissions.html", roles=roles, permissions=permissions)
+    return render_template("role_permissions/admin_permissions.html", roles=roles, permissions=permissions)
 
 
 @app.get("/api/admin/permissions")
@@ -688,6 +696,141 @@ def admin_permissions_save(role_id):
     require_permission("ROLE_PERMISSIONS", "can_edit")
     save_permissions(role_id, request.get_json(silent=True) or [], actor_id=session["user_id"])
     return jsonify({"success": True})
+
+
+@app.get("/admin/modules")
+def admin_modules():
+    require_permission("MODULE_MANAGEMENT")
+    modules = registered_modules(include_inactive=True)
+    permissions = {
+        module["module_id"]: list_module_permissions(module["module_id"])
+        for module in modules
+    }
+    return render_template(
+        "module_management/admin_modules.html", modules=modules, permissions=permissions,
+        parents=list_parent_menus(), roles=list_roles(),
+    )
+
+
+@app.get("/api/admin/modules")
+def admin_modules_api():
+    require_permission("MODULE_MANAGEMENT")
+    page = max(1, request.args.get("page", 1, type=int) or 1)
+    page_size = max(1, min(100, request.args.get("page_size", 50, type=int) or 50))
+    modules = registered_modules(page_size + 1, (page - 1) * page_size, include_inactive=True)
+    has_next = len(modules) > page_size
+    return jsonify({"modules": modules[:page_size], "page": page, "page_size": page_size, "has_next": has_next})
+
+
+@app.get("/api/modules/available")
+def available_modules_api():
+    page = max(1, request.args.get("page", 1, type=int) or 1)
+    page_size = max(1, min(100, request.args.get("page_size", 50, type=int) or 50))
+    modules = list_available_modules(session["user_id"], page_size + 1, (page - 1) * page_size)
+    has_next = len(modules) > page_size
+    return jsonify({"modules": modules[:page_size], "page": page, "page_size": page_size, "has_next": has_next})
+
+
+@app.post("/api/admin/modules/validate")
+def validate_module_manifest_api():
+    require_permission("MODULE_MANAGEMENT", "can_create")
+    try:
+        payload = request.get_json(silent=True) or {}
+        return jsonify({"manifest": validate_manifest(payload.get("manifest_url", ""))})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/admin/modules")
+def register_module_api():
+    require_permission("MODULE_MANAGEMENT", "can_create")
+    try:
+        payload = request.get_json(silent=True) or {}
+        manifest = validate_manifest(payload.get("manifest_url", ""))
+        parent_menu_id = int(payload.get("parent_menu_id", 0))
+        if parent_menu_id not in {item["menu_id"] for item in list_parent_menus()}:
+            raise ValueError("Choose an active navigation group.")
+        module = register_module(
+            manifest, session["user_id"], parent_menu_id,
+            int(payload.get("display_order", 0)),
+        )
+        return jsonify({"module": module, "is_enabled": False}), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        app.logger.exception("Module registration failed")
+        return jsonify({"error": "Unable to register this module. Verify that its code is not already registered."}), 409
+
+
+@app.put("/api/admin/modules/<int:module_id>")
+def update_module_api(module_id):
+    require_permission("MODULE_MANAGEMENT", "can_edit")
+    try:
+        module = update_module(module_id, request.get_json(silent=True) or {}, session["user_id"])
+        return jsonify({"module": module})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/admin/modules/<int:module_id>/health-check")
+def module_health_check_api(module_id):
+    require_permission("MODULE_MANAGEMENT", "can_edit")
+    try:
+        return jsonify(check_module_health(module_id, session["user_id"]))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+
+@app.put("/api/admin/modules/<int:module_id>/enabled")
+def set_module_enabled_api(module_id):
+    require_permission("MODULE_MANAGEMENT", "can_edit")
+    try:
+        enabled = (request.get_json(silent=True) or {}).get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean value.")
+        set_module_enabled(module_id, enabled, session["user_id"])
+        return jsonify({"module_id": module_id, "is_enabled": enabled})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+
+@app.put("/api/admin/modules/<int:module_id>/permissions/<int:role_id>")
+def save_module_permissions_api(module_id, role_id):
+    require_permission("MODULE_MANAGEMENT", "can_edit")
+    try:
+        save_module_permissions(
+            module_id, role_id, request.get_json(silent=True) or {}, session["user_id"],
+        )
+        return jsonify({"success": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.delete("/api/admin/modules/<int:module_id>")
+def deregister_module_api(module_id):
+    require_permission("MODULE_MANAGEMENT", "can_delete")
+    try:
+        deregister_module(module_id, session["user_id"])
+        return jsonify({"success": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+
+@app.get("/modules/<module_code>/launch")
+def launch_module(module_code):
+    if not module_permission(session["user_id"], module_code, "can_view"):
+        abort(403)
+    module = get_launch_target(module_code)
+    if not module:
+        abort(404)
+    if module["module_type"] == "INTERNAL":
+        target = module["web_url"]
+        if not target.startswith("/") or target.startswith("//") or ".." in target.split("/"):
+            abort(404)
+        return redirect(target)
+    base_url = module["web_url"].rstrip("/") + "/"
+    destination = urljoin(base_url, module["entry_path"].lstrip("/"))
+    return redirect(destination)
 
 
 def vault_for_session():
@@ -749,33 +892,51 @@ def require_role(role):
 def index():
     require_permission("DEPLOYMENT_MANAGER")
     return render_template(
-        "index.html",
+        "db_compare/index.html",
         database_defaults=PG_DEFAULTS,
-        can_deploy=has_permission(session["user_id"], "DEPLOYMENT_MANAGER", "can_execute"),
+        can_deploy=module_permission(session["user_id"], "DB_COMPARE", "can_execute"),
     )
 
 
 @app.get("/comparison")
 def comparison_page():
     require_permission("COMPARISON_RESULTS")
-    return render_template("index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
+    return render_template("db_compare/index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
 
 
 @app.get("/history")
 def history_page():
     require_permission("DEPLOYMENT_HISTORY")
-    return render_template("index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
+    return render_template("db_compare/index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
 
 
 @app.get("/backups")
 def backups_page():
     require_permission("BACKUP_REPOSITORY")
-    return render_template("index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
+    return render_template("db_compare/index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
 
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok"})
+    module = get_module_by_code("DB_COMPARE")
+    if not module:
+        return jsonify({"status": "DOWN", "module_code": "DB_COMPARE"}), 503
+    return jsonify({"status": "UP", "module_code": "DB_COMPARE", "version": module["version"]})
+
+
+@app.get("/api/module-manifest")
+def module_manifest():
+    module = get_launch_target("DB_COMPARE")
+    if not module:
+        return jsonify({"error": "DB_COMPARE is disabled or not registered."}), 404
+    return jsonify({
+        "module_code": module["module_code"], "module_name": module["module_name"],
+        "version": module["version"], "description": module["description"],
+        "web_url": module["web_url"], "api_base_url": module["api_base_url"],
+        "manifest_url": module["manifest_url"], "health_url": module["health_url"],
+        "entry_path": module["entry_path"], "icon": module["icon"],
+        "capabilities": module["capabilities"],
+    })
 
 
 @app.post("/api/connect-td")
@@ -813,8 +974,8 @@ def _payload_config(payload):
 def _connect(role):
     require_any_permission("DEPLOYMENT_MANAGER", "COMPARISON_RESULTS")
     payload = request.get_json(silent=True) or {}
-    if not payload.get("database_id") and not has_permission(
-        session["user_id"], "DEPLOYMENT_MANAGER", "can_execute"
+    if not payload.get("database_id") and not module_permission(
+        session["user_id"], "DB_COMPARE", "can_execute"
     ):
         abort(403)
     try:
@@ -1100,7 +1261,7 @@ def _deploy():
         state = vault_for_session()
         live = require_role("live")
         items = selected_items()
-        from services.function_service import fetch_matching_keys
+        from modules.db_compare.services.function_service import fetch_matching_keys
         current = fetch_matching_keys(live, {item["key"] for item in items})
         stale = stale_function_keys(items, current)
         if stale:
@@ -1138,6 +1299,7 @@ def deployments():
 
 @app.get("/api/deployments/<deployment_id>")
 def deployment_detail(deployment_id):
+    require_permission("DEPLOYMENT_HISTORY")
     records = [item for item in vault_for_session().get("history", []) if item.get("deployment_id") == deployment_id]
     return jsonify({"deployment_id": deployment_id, "history": records})
 

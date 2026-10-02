@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Sign in | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=admin-inline4">
+</head>
+<body class="auth-page">
+  <main class="login-card">
+    <div class="brand-mark">PG</div>
+    <p class="eyebrow accent">DBA OPERATIONS PLATFORM</p>
+    <h1>DBA Operations Platform</h1>
+    <p class="login-copy">Sign in to DBA Operations Platform.</p>
+    {% if success %}<div class="notice" role="status">{{ success }}</div>{% endif %}
+    {% if error %}<div class="notice auth-error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('login_submit') }}" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+      <label>Username<input name="identifier" value="{{ login_identifier or '' }}" autocomplete="username" required autofocus></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <label class="admin-login-toggle"><input id="adminLoginToggle" name="admin_login" type="checkbox"{% if admin_login_checked %} checked{% endif %}>Admin Login</label>
+      <button id="loginSubmit" class="btn btn-warning w-100" type="submit">{{ 'Admin Login' if admin_login_checked else 'Login' }}</button>
+    </form>
+    <nav class="auth-links" aria-label="Account help"><a href="{{ url_for('forgot_password') }}">Forgot Password?</a><a href="{{ url_for('profile_password') }}">Change Password</a></nav>
+    <section id="adminAccess" class="admin-access-panel" data-admin-exists="{{ 'true' if admin_exists else 'false' }}"{% if not show_admin_access %} hidden{% endif %} aria-labelledby="adminAccessTitle">
+      <h2 id="adminAccessTitle">Admin Account</h2>
+      {% if not admin_exists %}<p class="admin-access-copy">Don't have an Admin account?</p>{% endif %}
+      <a id="openAdminRegistration" class="btn btn-outline-light w-100" href="{{ url_for('admin_register') }}">Create Admin Account</a>
+    </section>
+  </main>
+  <script>
+    const adminToggle = document.getElementById('adminLoginToggle');
+    const adminAccess = document.getElementById('adminAccess');
+    const loginSubmit = document.getElementById('loginSubmit');
+    adminToggle.addEventListener('change', () => {
+      adminAccess.hidden = !adminToggle.checked;
+      loginSubmit.textContent = adminToggle.checked ? 'Admin Login' : 'Login';
+    });
+  </script>
+</body>
+</html>
