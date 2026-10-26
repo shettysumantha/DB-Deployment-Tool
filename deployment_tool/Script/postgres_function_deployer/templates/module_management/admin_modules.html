@@ -25,7 +25,7 @@
         <label>API Base URL (Optional)<input name="api_base_url" type="url" placeholder="https://module.example.com/api"></label>
         <label>Manifest URL (Optional)<input name="manifest_url" type="url" placeholder="https://module.example.com/api/module-manifest"></label>
         <label>Health URL (Optional)<input name="health_url" type="url" placeholder="https://module.example.com/api/health"></label>
-        <label>Navigation parent<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}">{{ parent.menu_name }}</option>{% endfor %}</select></label>
+        <label>Navigation submenu<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}">{{ parent.parent_menu_name }} / {{ parent.menu_name }}</option>{% else %}<option value="" disabled selected>No active submenu is available</option>{% endfor %}</select></label>
         <label>Display order<input name="display_order" type="number" min="0" value="10"></label>
         <button id="validateModule" class="btn btn-secondary" type="button">Validate module</button>
         <button id="registerModule" class="btn btn-primary" type="submit" disabled>Register disabled module</button>
@@ -42,7 +42,7 @@
               <tr data-module-id="{{ module.module_id }}">
                 <td><strong>{{ module.module_name }}</strong><br><code>{{ module.module_code }}</code><br><small>{{ module.module_type }}</small></td>
                 <td>{{ module.version }}</td>
-                <td>{{ module.parent_menu_name or 'Unassigned' }}<br><small>Order {{ module.display_order }}</small></td>
+                <td>{% set submenu = parents|selectattr('menu_id', 'equalto', module.parent_menu_id)|first %}{% if submenu %}{{ submenu.parent_menu_name }} / {{ submenu.menu_name }}{% else %}{{ module.parent_menu_name or 'Unassigned' }} <small>(legacy parent)</small>{% endif %}<br><small>Order {{ module.display_order }}</small></td>
                 <td><span class="badge-status badge-{{ module.health_status|lower }}">{{ module.health_status }}</span>{% if module.last_health_check_at %}<br><small>{{ module.last_health_check_at.strftime('%Y-%m-%d %H:%M') }}</small>{% endif %}</td>
                 <td>{{ 'Enabled' if module.is_enabled else 'Disabled' }}{% if not module.is_active %}<br><small>De-registered</small>{% endif %}</td>
                 <td>
@@ -69,7 +69,7 @@
                       <label>Health URL (Optional)<input name="health_url" value="{{ module.health_url or '' }}"></label>
                       <label>Entry path<input name="entry_path" value="{{ module.entry_path }}" required></label>
                       <label>Icon<input name="icon" value="{{ module.icon }}" required></label>
-                      <label>Navigation parent<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}"{% if parent.menu_id == module.parent_menu_id %} selected{% endif %}>{{ parent.menu_name }}</option>{% endfor %}</select></label>
+                      <label>Navigation submenu<select name="parent_menu_id" required>{% if not (parents|selectattr('menu_id', 'equalto', module.parent_menu_id)|list) %}<option value="{{ module.parent_menu_id }}" selected>{{ module.parent_menu_name }} (legacy parent)</option>{% endif %}{% for parent in parents %}<option value="{{ parent.menu_id }}"{% if parent.menu_id == module.parent_menu_id %} selected{% endif %}>{{ parent.parent_menu_name }} / {{ parent.menu_name }}</option>{% else %}{% if parents|length == 0 %}<option value="" disabled>No active submenus available</option>{% endif %}{% endfor %}</select></label>
                       <label>Display order<input name="display_order" type="number" min="0" value="{{ module.display_order }}"></label>
                       <button class="btn btn-secondary" type="submit">Save settings</button>
                     </form>

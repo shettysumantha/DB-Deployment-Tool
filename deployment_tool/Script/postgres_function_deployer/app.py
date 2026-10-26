@@ -4,17 +4,20 @@ import re
 import secrets
 import threading
 import time
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urljoin
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
-from psycopg2.errors import CheckViolation
+from PIL import Image, ImageOps, UnidentifiedImageError
+import psycopg2
+from psycopg2.errors import CheckViolation, UniqueViolation
 
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
 from core.database.db_service import clean_config, safe_error, test_connection
 from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
-from core.security.security_service import admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_user, user_has_role, user_menus, user_roles, user_session_state
+from core.security.security_service import UserNotFoundError, admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, get_profile, get_user_management_detail, get_user_management_edit_data, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_user_management_data, list_user_management_page, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_profile, update_user, user_has_role, user_menus, user_roles, user_session_state
 from modules.database_management.credential_service import connection_config, get_database, list_databases, save_database, update_database
 from modules.db_compare.services.backup_service import create_backup, safe_backup_path
 from modules.db_compare.services.comparison_service import compare_functions
@@ -29,6 +32,7 @@ from modules.db_compare.services.table_service import _signature as table_signat
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "generated_scripts"
 app = Flask(__name__)
+AVATAR_DIR = Path(app.instance_path) / "profile_avatars"
 app.config.update(SECRET_KEY=SECRET_KEY, MAX_CONTENT_LENGTH=2 * 1024 * 1024)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
@@ -373,9 +377,126 @@ def reset_password(token):
     return render_template("authentication/reset_password.html", token=token)
 
 
+def _store_profile_avatar(upload):
+    content = upload.read(2 * 1024 * 1024 + 1)
+    if not content:
+        raise ValueError("Choose an image file to upload.")
+    if len(content) > 2 * 1024 * 1024:
+        raise ValueError("Profile images must be 2 MB or smaller.")
+
+    try:
+        with Image.open(BytesIO(content)) as candidate:
+            if candidate.format not in {"PNG", "JPEG", "WEBP"}:
+                raise ValueError("Upload a PNG, JPEG, or WebP image.")
+            candidate.verify()
+        with Image.open(BytesIO(content)) as image:
+            if image.width * image.height > 16_000_000:
+                raise ValueError("Profile image dimensions are too large.")
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((1024, 1024))
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+            output = BytesIO()
+            image.save(output, format="WEBP", quality=82, method=5)
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("The uploaded file is not a valid supported image.") from exc
+
+    key = f"{secrets.token_hex(20)}.webp"
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    (AVATAR_DIR / key).write_bytes(output.getvalue())
+    return key
+
+
+def _delete_profile_avatar(avatar_key):
+    if isinstance(avatar_key, str) and re.fullmatch(r"[a-f0-9]{40}\.webp", avatar_key):
+        (AVATAR_DIR / avatar_key).unlink(missing_ok=True)
+
+
 @app.get("/profile")
 def profile():
-    return render_template("authentication/profile.html")
+    try:
+        user_profile = get_profile(session["user_id"])
+    except psycopg2.Error as exc:
+        _log_user_operation_error("profile query", exc)
+        return render_template(
+            "shared/error.html", code=503, title="Profile Unavailable",
+            message="Profile information could not be loaded.",
+        ), 503
+    if user_profile is None:
+        abort(404)
+    return render_template("authentication/profile.html", profile=user_profile)
+
+
+@app.get("/api/profile")
+def profile_api():
+    try:
+        user_profile = get_profile(session["user_id"])
+    except psycopg2.Error as exc:
+        _log_user_operation_error("profile query", exc)
+        return jsonify({"error": "Profile information could not be loaded."}), 503
+    if user_profile is None:
+        return jsonify({"error": "Profile not found."}), 404
+    user_profile["avatar_url"] = (
+        url_for("profile_avatar") if user_profile.get("avatar_key") else None
+    )
+    return jsonify({"profile": user_profile})
+
+
+@app.post("/api/profile")
+def update_profile_api():
+    try:
+        old_profile = get_profile(session["user_id"])
+    except psycopg2.Error as exc:
+        _log_user_operation_error("profile update preflight", exc)
+        return jsonify({"error": "Profile could not be loaded."}), 503
+    if old_profile is None:
+        return jsonify({"error": "Profile not found."}), 404
+
+    upload = request.files.get("avatar")
+    avatar_key = None
+    try:
+        if upload and upload.filename:
+            avatar_key = _store_profile_avatar(upload)
+        profile_data = update_profile(
+            session["user_id"], request.form, avatar_key=avatar_key
+        )
+    except ValueError as exc:
+        if avatar_key:
+            _delete_profile_avatar(avatar_key)
+        return jsonify({"error": str(exc)}), 400
+    except UniqueViolation:
+        if avatar_key:
+            _delete_profile_avatar(avatar_key)
+        return jsonify({"error": "That email address is already in use."}), 409
+    except psycopg2.Error as exc:
+        if avatar_key:
+            _delete_profile_avatar(avatar_key)
+        _log_user_operation_error("profile update", exc)
+        status = 503 if isinstance(exc, psycopg2.OperationalError) else 500
+        return jsonify({"error": "Profile could not be saved."}), status
+
+    if avatar_key and old_profile.get("avatar_key") != avatar_key:
+        _delete_profile_avatar(old_profile.get("avatar_key"))
+    profile_data["username"] = old_profile["username"]
+    profile_data["avatar_key"] = avatar_key or old_profile.get("avatar_key")
+    session["full_name"] = profile_data.get("full_name") or profile_data["username"]
+    profile_data["avatar_url"] = (
+        url_for("profile_avatar") if profile_data.get("avatar_key") else None
+    )
+    return jsonify({"profile": profile_data})
+
+
+@app.get("/profile/avatar")
+def profile_avatar():
+    try:
+        user_profile = get_profile(session["user_id"])
+    except psycopg2.Error as exc:
+        _log_user_operation_error("profile avatar query", exc)
+        abort(503)
+    avatar_key = (user_profile or {}).get("avatar_key")
+    if not isinstance(avatar_key, str) or not re.fullmatch(r"[a-f0-9]{40}\.webp", avatar_key):
+        abort(404)
+    return send_from_directory(AVATAR_DIR, avatar_key, mimetype="image/webp", max_age=3600)
 
 
 @app.route("/profile/password", methods=["GET", "POST"])
@@ -383,18 +504,18 @@ def profile_password():
     if request.method == "POST":
         password = request.form.get("new_password", "")
         if password != request.form.get("confirm_password", ""):
-            return render_template("authentication/profile.html", error="New passwords do not match."), 400
+            return render_template("authentication/profile_password.html", error="New passwords do not match."), 400
         try:
             if not change_password(session["user_id"], request.form.get("current_password", ""), password):
-                return render_template("authentication/profile.html", error="Current password is incorrect."), 400
+                return render_template("authentication/profile_password.html", error="Current password is incorrect."), 400
             session.clear()
             return redirect(url_for("login", changed="1"))
         except ValueError as exc:
-            return render_template("authentication/profile.html", error=str(exc)), 400
+            return render_template("authentication/profile_password.html", error=str(exc)), 400
         except Exception:
             app.logger.exception("Password change failed")
-            return render_template("authentication/profile.html", error="Unable to change password."), 400
-    return render_template("authentication/profile.html")
+            return render_template("authentication/profile_password.html", error="Unable to change password."), 400
+    return render_template("authentication/profile_password.html")
 
 @app.post("/logout")
 def logout_route():
@@ -424,6 +545,24 @@ def _permission_granted(menu_code, permission="can_view"):
     if menu_code in {"COMPARISON_RESULTS", "DEPLOYMENT_MANAGER", "DEPLOYMENT_HISTORY", "BACKUP_REPOSITORY"}:
         return module_permission(session["user_id"], "DB_COMPARE", permission)
     return has_permission(session["user_id"], menu_code, permission)
+
+
+def _log_user_operation_error(action, error):
+    app.logger.error(
+        "User %s failed (error_type=%s, sqlstate=%s)",
+        action,
+        type(error).__name__,
+        getattr(error, "pgcode", None),
+    )
+
+
+def _user_mutation_error(error, action):
+    _log_user_operation_error(action, error)
+    if isinstance(error, UniqueViolation):
+        return jsonify({"error": "Username or email already exists."}), 409
+    if isinstance(error, psycopg2.OperationalError):
+        return jsonify({"error": "User service is temporarily unavailable."}), 503
+    return jsonify({"error": "Unable to save user."}), 500
 
 
 def require_any_permission(*menu_codes, permission="can_view"):
@@ -477,12 +616,27 @@ def admin_menu_delete(menu_id):
 def admin_users():
     require_permission("USER_MANAGEMENT")
     page = max(1, request.args.get("page", 1, type=int) or 1)
-    page_size = max(1, min(100, request.args.get("page_size", 25, type=int) or 25))
-    users = list_users(page_size + 1, (page - 1) * page_size)
+    page_size = max(1, min(100, request.args.get("page_size", 10, type=int) or 10))
+    search = request.args.get("q", "").strip()
+    try:
+        users, roles, modules, total = list_user_management_page(
+            page_size + 1, (page - 1) * page_size, search
+        )
+    except ValueError as exc:
+        abort(400, description=str(exc))
+    except psycopg2.Error as exc:
+        _log_user_operation_error("management page query", exc)
+        status = 503 if isinstance(exc, psycopg2.OperationalError) else 500
+        return render_template(
+            "shared/error.html",
+            code=status,
+            title="User Management Unavailable",
+            message="The user list could not be loaded. Please try again later.",
+        ), status
     has_next = len(users) > page_size
     return render_template(
-        "user_management/admin_users.html", users=users[:page_size], roles=list_roles(), modules=list_modules(),
-        page=page, page_size=page_size, has_next=has_next,
+        "user_management/admin_users.html", users=users[:page_size], roles=roles, modules=modules,
+        page=page, page_size=page_size, has_next=has_next, total=total, search=search,
     )
 
 
@@ -490,24 +644,66 @@ def admin_users():
 def admin_users_api():
     require_permission("USER_MANAGEMENT")
     page = max(1, request.args.get("page", 1, type=int) or 1)
-    page_size = max(1, min(100, request.args.get("page_size", 50, type=int) or 50))
-    users = list_users(page_size + 1, (page - 1) * page_size)
+    page_size = max(1, min(100, request.args.get("page_size", 10, type=int) or 10))
+    search = request.args.get("q", "").strip()
+    try:
+        users, _roles, _modules, total = list_user_management_page(
+            page_size + 1, (page - 1) * page_size, search
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except psycopg2.Error as exc:
+        _log_user_operation_error("list API query", exc)
+        status = 503 if isinstance(exc, psycopg2.OperationalError) else 500
+        return jsonify({"error": "The user list could not be loaded."}), status
     has_next = len(users) > page_size
     return jsonify({
         "users": users[:page_size], "page": page,
-        "page_size": page_size, "has_next": has_next,
+        "page_size": page_size, "has_next": has_next, "total": total,
     })
+
+
+@app.get("/api/admin/users/<int:user_id>")
+def admin_user_detail_api(user_id):
+    require_permission("USER_MANAGEMENT")
+    try:
+        user = get_user_management_detail(user_id)
+        if user is None:
+            return jsonify({"error": "User not found."}), 404
+        return jsonify({"user": user})
+    except psycopg2.Error as exc:
+        _log_user_operation_error("user detail query", exc)
+        status = 503 if isinstance(exc, psycopg2.OperationalError) else 500
+        return jsonify({"error": "User details could not be loaded."}), status
+
+
+@app.get("/api/admin/users/<int:user_id>/edit")
+def admin_user_edit_data_api(user_id):
+    require_permission("USER_MANAGEMENT", "can_edit")
+    try:
+        user = get_user_management_edit_data(user_id)
+        if user is None:
+            return jsonify({"error": "User not found."}), 404
+        return jsonify({"user": user})
+    except psycopg2.Error as exc:
+        _log_user_operation_error("user edit data query", exc)
+        status = 503 if isinstance(exc, psycopg2.OperationalError) else 500
+        return jsonify({"error": "User edit data could not be loaded."}), status
 
 
 @app.post("/api/admin/users")
 def admin_user_create():
     require_permission("USER_MANAGEMENT", "can_create")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
     try:
-        data = request.get_json(silent=True) or {}
         data["actor_id"] = session["user_id"]
         return jsonify({"user_id": create_user(data)}), 201
-    except Exception as exc:
+    except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    except psycopg2.Error as exc:
+        return _user_mutation_error(exc, "creation")
 
 
 @app.post("/admin/users/create")
@@ -521,8 +717,8 @@ def admin_user_create_form():
         data["actor_id"] = session["user_id"]
         create_user(data)
         flash("User created.", "success")
-    except Exception:
-        app.logger.exception("User creation failed")
+    except Exception as exc:
+        _log_user_operation_error("creation", exc)
         flash("Unable to create user. Check that username and email are unique.", "error")
     return redirect(url_for("admin_users"))
 
@@ -537,8 +733,8 @@ def admin_user_update_form(user_id):
         data["actor_id"] = session["user_id"]
         update_user(user_id, data)
         flash("User updated.", "success")
-    except Exception:
-        app.logger.exception("User update failed")
+    except Exception as exc:
+        _log_user_operation_error("update", exc)
         flash("Unable to update user. Verify the supplied user and role values.", "error")
     return redirect(url_for("admin_users"))
 
@@ -546,14 +742,19 @@ def admin_user_update_form(user_id):
 @app.post("/api/admin/users/<int:user_id>")
 def admin_user_update_api(user_id):
     require_permission("USER_MANAGEMENT", "can_edit")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
     try:
-        data = request.get_json(silent=True) or {}
         data["actor_id"] = session["user_id"]
         update_user(user_id, data)
         return jsonify({"success": True})
-    except Exception:
-        app.logger.exception("User update failed")
-        return jsonify({"error": "Unable to update user."}), 400
+    except UserNotFoundError:
+        return jsonify({"error": "User not found."}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except psycopg2.Error as exc:
+        return _user_mutation_error(exc, "update")
 
 
 @app.post("/admin/users/<int:user_id>/deactivate")
@@ -564,8 +765,8 @@ def admin_user_deactivate(user_id):
         data["is_active"] = "is_active" in request.form
         update_user(user_id, data)
         flash("User status updated.", "success")
-    except Exception:
-        app.logger.exception("User status update failed")
+    except Exception as exc:
+        _log_user_operation_error("status update", exc)
         flash("Unable to update user status.", "error")
     return redirect(url_for("admin_users"))
 
@@ -585,8 +786,8 @@ def admin_user_password_reset(user_id):
                 elif DEBUG:
                     app.logger.info("Development password reset URL: %s", reset_url)
         flash("If the account is active, password reset instructions have been sent.", "success")
-    except Exception:
-        app.logger.exception("Admin password reset request failed")
+    except Exception as exc:
+        _log_user_operation_error("admin password reset request", exc)
         flash("Unable to send reset instructions.", "error")
     return redirect(url_for("admin_users"))
 
@@ -750,8 +951,6 @@ def register_module_api():
         payload = request.get_json(silent=True) or {}
         manifest = validate_module_registration(payload)
         parent_menu_id = int(payload.get("parent_menu_id", 0))
-        if parent_menu_id not in {item["menu_id"] for item in list_parent_menus()}:
-            raise ValueError("Choose an active navigation group.")
         module = register_module(
             manifest, session["user_id"], parent_menu_id,
             int(payload.get("display_order", 0)),

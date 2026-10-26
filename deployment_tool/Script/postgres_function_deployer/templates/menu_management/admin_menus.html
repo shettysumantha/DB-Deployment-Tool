@@ -5,6 +5,20 @@ const form = document.getElementById('menuForm');
 const submitButton = form.querySelector('[type="submit"]');
 const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 const menus = {{ menus|tojson }};
+const parentMenuSelect = form.elements.parent_menu_id;
+const filterParentMenus = () => {
+	const currentMenuId = Number(form.elements.menu_id.value) || null;
+	const isSubmenu = form.elements.menu_type.value === 'GROUP';
+	[...parentMenuSelect.options].forEach(option => {
+		if (!option.value) return;
+		const parent = menus.find(item => String(item.menu_id) === option.value);
+		option.hidden = !parent || !parent.is_active || parent.menu_type !== 'GROUP'
+			|| parent.menu_id === currentMenuId
+			|| (isSubmenu && parent.parent_menu_id !== null);
+	});
+};
+form.elements.menu_type.addEventListener('change', filterParentMenus);
+filterParentMenus();
 
 document.querySelectorAll('#menuRows tr[data-id]').forEach(row => {
 	const menu = menus.find(item => String(item.menu_id) === row.dataset.id);
@@ -19,6 +33,7 @@ document.querySelectorAll('#menuRows tr[data-id]').forEach(row => {
 		form.elements.menu_id.value = menu.menu_id;
 		form.elements.is_active.checked = Boolean(menu.is_active);
 		form.elements.open_in_new_tab.checked = Boolean(menu.open_in_new_tab);
+		filterParentMenus();
 		submitButton.textContent = 'Update Menu';
 		form.scrollIntoView({behavior: 'smooth', block: 'start'});
 	});

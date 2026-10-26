@@ -1,4 +1,5 @@
 .env
+instance/profile_avatars/
 credentials.json
 token.json
 .venv/

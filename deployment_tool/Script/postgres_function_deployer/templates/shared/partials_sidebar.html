@@ -11,12 +11,12 @@
 {% set hidden_child_menu_codes = ['DEPLOYMENT_MANAGER', 'DEPLOYMENT_HISTORY', 'BACKUP_REPOSITORY'] %}
 {% macro render_menu(menu) %}
   {% set visible_children = menu.children|rejectattr('menu_code', 'in', hidden_child_menu_codes)|list %}
-  {% if menu.menu_type == 'GROUP' and visible_children %}
+  {% if menu.menu_type == 'GROUP' %}
     <div class="sidebar-group">
       <button class="sidebar-link sidebar-parent" type="button" title="{{ menu.menu_name }}" aria-expanded="true" onclick="this.parentElement.classList.toggle('is-collapsed')">
         <span class="sidebar-icon" aria-hidden="true">{{ render_icon(menu) }}</span><span class="sidebar-label">{{ menu.menu_name }}</span><span class="sidebar-chevron" aria-hidden="true">⌄</span>
       </button>
-      <div class="sidebar-children">{% for child in visible_children %}{{ render_menu(child) }}{% endfor %}</div>
+      <div class="sidebar-children">{% for child in visible_children %}{{ render_menu(child) }}{% else %}<span class="sidebar-empty">No modules available</span>{% endfor %}</div>
     </div>
   {% elif menu.menu_type == 'EXTERNAL' %}
     <a class="sidebar-link" href="{{ menu.external_url }}" title="{{ menu.menu_name }}"{% if menu.open_in_new_tab %} target="_blank" rel="noopener noreferrer"{% endif %}>
