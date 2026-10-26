@@ -65,14 +65,17 @@ class FakePermissionConnection:
 
 
 class FakeRegistryCursor:
-    def __init__(self, existing_module=None):
+    def __init__(self, existing_module=None, valid_submenu=True):
         self.executed = []
         self.result = None
         self.existing_module = existing_module
+        self.valid_submenu = valid_submenu
 
     def execute(self, query, parameters=()):
         self.executed.append((query, parameters))
-        if query.lstrip().startswith("INSERT INTO app_security.modules"):
+        if "FROM app_security.menus AS submenu" in query:
+            self.result = (parameters[0],) if self.valid_submenu else None
+        elif query.lstrip().startswith("INSERT INTO app_security.modules"):
             self.result = None if self.existing_module else {
                 "module_id": 25, "module_code": "DB_SCHEMA_TRACKER",
                 "module_name": "DB Schema Tracker", "module_type": "EXTERNAL",
@@ -122,6 +125,11 @@ class FakeRegistryConnection:
 
 
 class ModuleServiceTests(unittest.TestCase):
+    def test_module_submenu_validation_rejects_unrelated_menu(self):
+        cursor = FakeRegistryCursor(valid_submenu=False)
+        with self.assertRaisesRegex(ValueError, "active submenu"):
+            module_service._validate_module_submenu(cursor, 99)
+
     def test_private_ip_urls_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "private or non-public"):
             module_service._validate_url("https://127.0.0.1/api/module-manifest", "Manifest URL")
@@ -292,6 +300,12 @@ class ModuleServiceTests(unittest.TestCase):
         with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
             self.assertTrue(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_view"))
 
+    def test_direct_module_assignment_grants_view_only(self):
+        row = (False, True, 12, False, True)
+        with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
+            self.assertTrue(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_view"))
+            self.assertFalse(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_edit"))
+
     def test_admin_access_is_module_enabled_and_permission_scoped(self):
         row = (True, True, None, False, False)
         with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
@@ -315,9 +329,17 @@ class ModuleServiceTests(unittest.TestCase):
             record = module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=9)
 
         self.assertFalse(record["is_enabled"])
-        statements = [query for query, _parameters in connection.cursor_instance.executed]
-        self.assertIn("INSERT INTO app_security.role_module_permissions", statements[1])
-        self.assertEqual(connection.cursor_instance.executed[2][1][1], "MODULE_REGISTERED")
+        executed = connection.cursor_instance.executed
+        statements = [query for query, _parameters in executed]
+        self.assertEqual(executed[0][1], (4,))
+        insert_parameters = next(
+            parameters for query, parameters in executed
+            if query.lstrip().startswith("INSERT INTO app_security.modules")
+        )
+        self.assertEqual(insert_parameters[10], 4)
+        self.assertTrue(any("INSERT INTO app_security.role_module_permissions" in query for query in statements))
+        audit = next(parameters for query, parameters in connection.cursor_instance.executed if "INSERT INTO app_security.audit_logs" in query)
+        self.assertEqual(audit[1], "MODULE_REGISTERED")
         self.assertTrue(connection.committed)
 
     def test_same_code_and_url_reuses_existing_registration(self):
@@ -342,9 +364,11 @@ class ModuleServiceTests(unittest.TestCase):
         self.assertTrue(record["is_active"])
         self.assertEqual(record["module_id"], 41)
         self.assertEqual(sum(query.lstrip().startswith("INSERT INTO app_security.modules") for query, _ in statements), 1)
-        self.assertIn("ON CONFLICT (module_code) DO NOTHING", statements[0][0])
-        self.assertIn("is_active = TRUE", statements[2][0])
-        self.assertNotIn("is_enabled =", statements[2][0])
+        insert = next(query for query, _parameters in statements if query.lstrip().startswith("INSERT INTO app_security.modules"))
+        update = next(query for query, _parameters in statements if query.lstrip().startswith("UPDATE app_security.modules"))
+        self.assertIn("ON CONFLICT (module_code) DO NOTHING", insert)
+        self.assertIn("is_active = TRUE", update)
+        self.assertNotIn("is_enabled =", update)
         self.assertEqual(statements[-1][1][1], "MODULE_REGISTRATION_REUSED")
         self.assertTrue(connection.committed)
 
@@ -369,7 +393,7 @@ class ModuleServiceTests(unittest.TestCase):
                 module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=10)
 
         self.assertFalse(connection.committed)
-        self.assertEqual(len(connection.cursor_instance.executed), 2)
+        self.assertEqual(len(connection.cursor_instance.executed), 3)
 
     def test_web_only_registration_stores_null_api_urls_and_can_be_enabled(self):
         web_url = "https://db-schema-tracker-1.onrender.com/"
@@ -380,8 +404,11 @@ class ModuleServiceTests(unittest.TestCase):
             record = module_service.register_module(module, actor_id=8, parent_menu_id=4, display_order=10)
             enabled = module_service.set_module_enabled(record["module_id"], True, actor_id=8)
 
-        insert_parameters = connection.cursor_instance.executed[0][1]
-        insert_query = connection.cursor_instance.executed[0][0]
+        insert_query, insert_parameters = next(
+            (query, parameters)
+            for query, parameters in connection.cursor_instance.executed
+            if query.lstrip().startswith("INSERT INTO app_security.modules")
+        )
         self.assertEqual(insert_parameters[4:8], (web_url, None, None, None))
         self.assertEqual(insert_parameters[12:14], ("UNKNOWN", "UNKNOWN"))
         self.assertEqual(insert_query.count("%s"), len(insert_parameters))

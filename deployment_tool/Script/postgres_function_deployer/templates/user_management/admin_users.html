@@ -30,49 +30,159 @@
         <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
         <label>Confirm password<input name="confirm_password" type="password" required minlength="8" autocomplete="new-password"></label>
         <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}">{{ role.role_name }}</option>{% endfor %}</select></label>
-        <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.menu_id }}">{{ module.menu_name }}</label>{% endfor %}</div></fieldset>
+        <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.module_id }}">{{ module.parent_menu_name or 'Unassigned' }} / {{ module.submenu_name or 'No submenu' }} / {{ module.module_name }}{% if not module.is_enabled %} (disabled){% endif %}</label>{% else %}<p class="empty-state">No registered modules available.</p>{% endfor %}</div></fieldset>
         <button class="btn btn-primary" type="submit">Create user</button>
       </form>
     </section>
     <section class="admin-section">
-      <div class="admin-section-heading"><h2>Users</h2><span>{{ users|length }} accounts on this page</span></div>
+      <div class="admin-section-heading"><h2>Users</h2><span>{{ total }} accounts</span></div>
+      <form class="admin-form user-search-form" method="get" action="{{ url_for('admin_users') }}">
+        <label>Search username, name, or email<input name="q" type="search" maxlength="100" value="{{ search }}" placeholder="Search users"></label>
+        <input type="hidden" name="page_size" value="{{ page_size }}">
+        <button class="btn btn-secondary" type="submit">Search</button>
+        {% if search %}<a class="btn btn-outline-secondary" href="{{ url_for('admin_users', page_size=page_size) }}">Clear</a>{% endif %}
+      </form>
       <div class="table-wrap admin-table-wrap">
         <table class="admin-users-table">
-          <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Modules</th><th>Created</th><th>Last login</th><th>Actions</th></tr></thead>
+          <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Modules</th><th>Actions</th></tr></thead>
           <tbody>
             {% for user in users %}
-              <tr>
-                <td colspan="8">
-                  <form class="user-edit-row" method="post" action="{{ url_for('admin_user_update_form', user_id=user.user_id) }}">
+              <tr data-user-id="{{ user.user_id }}">
+                <td><strong>{{ user.full_name or user.username }}</strong><br><small>{{ user.username }}</small></td>
+                <td>{{ user.email or 'Not provided' }}</td>
+                <td>{{ user.roles or ('ADMIN' if user.is_admin else 'No role') }}</td>
+                <td>{{ 'Active' if user.is_active else 'Inactive' }}</td>
+                <td>{{ user.module_ids|length }}</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-secondary" type="button" data-user-view>View</button>
+                  <button class="btn btn-sm btn-secondary" type="button" data-user-edit>Edit</button>
+                  <form method="post" action="{{ url_for('admin_user_password_reset', user_id=user.user_id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <label>Username<input name="username" value="{{ user.username }}" required></label>
-                    <label>Email<input name="email" type="email" value="{{ user.email or '' }}"></label>
-                    <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}"{% if role.role_name in user.roles.split(', ') %} selected{% endif %}>{{ role.role_name }}</option>{% endfor %}</select></label>
-                    <label class="user-status-field"><input type="checkbox" name="is_active" value="true"{% if user.is_active %} checked{% endif %}><span>{{ 'Active' if user.is_active else 'Inactive' }}</span></label>
-                    <span class="user-module-count">{{ user.module_ids|length }} modules</span>
-                    <span class="user-created">{{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '—' }}</span>
-                    <span class="user-last-login">{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else 'Never' }}</span>
-                    <div class="user-update-fields">
-                      <label>Full name<input name="full_name" value="{{ user.full_name or '' }}"></label>
-                      <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.menu_id }}"{% if module.menu_id in user.module_ids %} checked{% endif %}>{{ module.menu_name }}</label>{% endfor %}</div></fieldset>
-                      <button class="btn btn-secondary" type="submit">Save</button>
-                      <button class="btn btn-outline-secondary" type="submit" formaction="{{ url_for('admin_user_password_reset', user_id=user.user_id) }}">Send Password Reset</button>
-                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" type="submit" aria-label="Send password reset to {{ user.username }}">Reset password</button>
                   </form>
                 </td>
               </tr>
             {% else %}
-              <tr><td colspan="8" class="empty-state">No application users found.</td></tr>
+              <tr><td colspan="6" class="empty-state">{% if search %}No users match this search.{% else %}No application users found.{% endif %}</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       <nav class="admin-section-heading" aria-label="User list pages">
-        {% if page > 1 %}<a class="btn btn-secondary" href="{{ url_for('admin_users', page=page - 1, page_size=page_size) }}">Previous</a>{% endif %}
-        <span>Page {{ page }}</span>
-        {% if has_next %}<a class="btn btn-secondary" href="{{ url_for('admin_users', page=page + 1, page_size=page_size) }}">Next</a>{% endif %}
+        {% if page > 1 %}<a class="btn btn-secondary" href="{{ url_for('admin_users', page=page - 1, page_size=page_size, q=search) }}">Previous</a>{% endif %}
+        <span>Page {{ page }} of {{ [((total + page_size - 1) // page_size), 1]|max }}</span>
+        {% if has_next %}<a class="btn btn-secondary" href="{{ url_for('admin_users', page=page + 1, page_size=page_size, q=search) }}">Next</a>{% endif %}
       </nav>
     </section>
+    <dialog class="user-dialog" id="userViewDialog" aria-labelledby="userViewTitle">
+      <div class="user-dialog-header"><h2 id="userViewTitle">User details</h2><button class="btn btn-sm btn-outline-secondary" type="button" data-close-view aria-label="Close user details">Close</button></div>
+      <p class="user-dialog-status" role="status"></p>
+      <dl class="user-detail-list">
+        <dt>Username</dt><dd data-detail="username"></dd>
+        <dt>Full name</dt><dd data-detail="full_name"></dd>
+        <dt>Email</dt><dd data-detail="email"></dd>
+        <dt>Role</dt><dd data-detail="roles"></dd>
+        <dt>Modules</dt><dd data-detail="modules"></dd>
+      </dl>
+    </dialog>
+    <dialog class="user-dialog" id="userEditDialog" aria-labelledby="userEditTitle">
+      <form class="admin-form" id="userEditForm">
+        <div class="user-dialog-header"><h2 id="userEditTitle">Edit user</h2><button class="btn btn-sm btn-outline-secondary" type="button" data-close-edit aria-label="Cancel editing">Cancel</button></div>
+        <p class="user-dialog-status" role="status"></p>
+        <label>Username<input name="username" required maxlength="100"></label>
+        <label>Full name<input name="full_name" maxlength="150"></label>
+        <label>Email<input name="email" type="email" maxlength="255"></label>
+        <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}">{{ role.role_name }}</option>{% endfor %}</select></label>
+        <label class="user-status-field"><input name="is_active" type="checkbox"><span>Active</span></label>
+        <fieldset class="module-access-field"><legend>Module access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.module_id }}">{{ module.parent_menu_name or 'Unassigned' }} / {{ module.submenu_name or 'No submenu' }} / {{ module.module_name }}{% if not module.is_enabled %} (disabled){% endif %}</label>{% else %}<p class="empty-state">No registered modules available.</p>{% endfor %}</div></fieldset>
+        <div class="user-dialog-actions"><button class="btn btn-primary" type="submit">Save changes</button><button class="btn btn-outline-secondary" type="button" data-close-edit>Cancel</button></div>
+      </form>
+    </dialog>
   </main>
+  <script>
+    const userCsrf = document.querySelector('meta[name="csrf-token"]').content;
+    const viewDialog = document.getElementById('userViewDialog');
+    const editDialog = document.getElementById('userEditDialog');
+    const editForm = document.getElementById('userEditForm');
+    const renderModuleList = (container, modules) => {
+      container.replaceChildren();
+      if (!modules.length) { container.textContent = 'No modules assigned'; return; }
+      const groups = new Map();
+      modules.forEach(module => {
+        const groupName = [module.main_menu_name, module.parent_name].filter(Boolean).join(' / ') || 'Other';
+        if (!groups.has(groupName)) groups.set(groupName, []);
+        groups.get(groupName).push(module.name);
+      });
+      groups.forEach((names, groupName) => {
+        const group = document.createElement('div');
+        const heading = document.createElement('strong');
+        heading.textContent = groupName;
+        const list = document.createElement('ul');
+        names.forEach(name => { const item = document.createElement('li'); item.textContent = name; list.append(item); });
+        group.append(heading, list);
+        container.append(group);
+      });
+    };
+    const loadUser = async (userId, edit = false) => {
+      const path = `/api/admin/users/${encodeURIComponent(userId)}${edit ? '/edit' : ''}`;
+      const response = await fetch(path);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Unable to load user details.');
+      return result;
+    };
+    document.querySelectorAll('[data-user-view]').forEach(button => button.addEventListener('click', async () => {
+      const status = viewDialog.querySelector('.user-dialog-status');
+      status.textContent = 'Loading user details…';
+      viewDialog.showModal();
+      try {
+        const {user} = await loadUser(button.closest('tr').dataset.userId);
+        viewDialog.querySelector('[data-detail="username"]').textContent = user.username;
+        viewDialog.querySelector('[data-detail="full_name"]').textContent = user.full_name || 'Not provided';
+        viewDialog.querySelector('[data-detail="email"]').textContent = user.email || 'Not provided';
+        viewDialog.querySelector('[data-detail="roles"]').textContent = user.roles.join(', ') || 'No role';
+        renderModuleList(viewDialog.querySelector('[data-detail="modules"]'), user.modules);
+        status.textContent = '';
+      } catch (error) { status.textContent = error.message; }
+    }));
+    document.querySelectorAll('[data-user-edit]').forEach(button => button.addEventListener('click', async () => {
+      const status = editDialog.querySelector('.user-dialog-status');
+      status.textContent = 'Loading user details…';
+      editDialog.showModal();
+      try {
+        const {user} = await loadUser(button.closest('tr').dataset.userId, true);
+        editForm.dataset.userId = button.closest('tr').dataset.userId;
+        editForm.elements.username.value = user.username;
+        editForm.elements.full_name.value = user.full_name || '';
+        editForm.elements.email.value = user.email || '';
+        editForm.elements.role_id.value = user.role_id || '';
+        editForm.elements.is_active.checked = user.is_active;
+        const assigned = new Set(user.module_ids.map(String));
+        editForm.querySelectorAll('[name="module_ids"]').forEach(input => { input.checked = assigned.has(input.value); });
+        status.textContent = '';
+      } catch (error) { status.textContent = error.message; }
+    }));
+    document.querySelectorAll('[data-close-view]').forEach(button => button.addEventListener('click', () => viewDialog.close()));
+    document.querySelectorAll('[data-close-edit]').forEach(button => button.addEventListener('click', () => editDialog.close()));
+    editForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = editForm.querySelector('[type="submit"]');
+      const status = editDialog.querySelector('.user-dialog-status');
+      button.disabled = true;
+      status.textContent = 'Saving…';
+      const payload = Object.fromEntries(new FormData(editForm));
+      payload.is_active = editForm.elements.is_active.checked;
+      payload.module_ids = [...editForm.querySelectorAll('[name="module_ids"]:checked')].map(input => input.value);
+      try {
+        const response = await fetch(`/api/admin/users/${encodeURIComponent(editForm.dataset.userId)}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': userCsrf}, body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Unable to save user.');
+        editDialog.close();
+        location.reload();
+      } catch (error) { status.textContent = error.message; }
+      finally { button.disabled = false; }
+    });
+  </script>
 </body>
 </html>

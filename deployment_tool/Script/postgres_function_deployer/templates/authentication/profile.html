@@ -10,17 +10,69 @@
   {% include 'shared/partials_sidebar.html' %}
   <header class="topbar dashboard-topbar"><div class="page-shell dashboard-topbar-inner"><div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>DBA Operations Platform</h1></div></div><div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div></div></header>
   <main class="main-content admin-content">
-    <header class="admin-page-heading"><div><p class="eyebrow accent">ACCOUNT</p><h1>Change Password</h1></div></header>
-    {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
-    <section class="admin-section profile-password-section">
-      <form class="admin-form profile-password-form" method="post" action="{{ url_for('profile_password') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label>Current Password<input name="current_password" type="password" required autocomplete="current-password"></label>
-        <label>New Password<input name="new_password" type="password" required minlength="8" autocomplete="new-password"></label>
-        <label>Confirm New Password<input name="confirm_password" type="password" required minlength="8" autocomplete="new-password"></label>
-        <button class="btn btn-primary" type="submit">Change Password</button>
-      </form>
+    <header class="admin-page-heading"><div><p class="eyebrow accent">ACCOUNT</p><h1>Profile</h1></div></header>
+    <p id="profileNotice" class="notice d-none" role="status"></p>
+    <section class="profile-summary admin-section" aria-labelledby="profileName">
+      <div class="profile-avatar-wrap">
+        {% if profile.avatar_key %}<img id="profileAvatar" class="profile-avatar" src="{{ url_for('profile_avatar') }}" alt="Profile image">
+        {% else %}<div id="profileAvatar" class="profile-avatar profile-avatar-fallback" role="img" aria-label="Default profile avatar">{{ (profile.full_name or profile.username)[:1]|upper }}</div>{% endif %}
+      </div>
+      <div class="profile-summary-main"><p class="eyebrow accent">SIGNED-IN ACCOUNT</p><h2 id="profileName">{{ profile.full_name or profile.username }}</h2><p>@{{ profile.username }}</p><p data-profile-field="email">{{ profile.email or 'Email not provided' }}</p><p data-profile-field="mobile_number">{{ profile.mobile_number or 'Mobile number not provided' }}</p></div>
+      <div class="profile-actions"><button class="btn btn-secondary" id="editProfileButton" type="button">Edit Profile</button><a class="btn btn-primary" href="{{ url_for('profile_password') }}">Change Password</a></div>
     </section>
+    <dialog class="user-dialog profile-dialog" id="profileDialog" aria-labelledby="profileDialogTitle">
+      <form class="admin-form" id="profileForm" enctype="multipart/form-data">
+        <div class="user-dialog-header"><h2 id="profileDialogTitle">Edit Profile</h2><button class="btn btn-sm btn-outline-secondary" type="button" id="cancelProfile">Cancel</button></div>
+        <p class="user-dialog-status" id="profileFormStatus" role="status"></p>
+        <label>Full name<input name="full_name" maxlength="150" value="{{ profile.full_name or '' }}"></label>
+        <label>Email<input name="email" type="email" maxlength="255" value="{{ profile.email or '' }}"></label>
+        <label>Mobile number<input name="mobile_number" type="tel" maxlength="32" value="{{ profile.mobile_number or '' }}"></label>
+        <label>Profile image<input name="avatar" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        <div class="user-dialog-actions"><button class="btn btn-primary" id="saveProfile" type="submit">Save Profile</button><button class="btn btn-outline-secondary" type="button" id="cancelProfileSecondary">Cancel</button></div>
+      </form>
+    </dialog>
   </main>
+  <script>
+    const profileDialog = document.getElementById('profileDialog');
+    const profileForm = document.getElementById('profileForm');
+    const profileNotice = document.getElementById('profileNotice');
+    const profileStatus = document.getElementById('profileFormStatus');
+    document.getElementById('editProfileButton').addEventListener('click', () => profileDialog.showModal());
+    document.querySelectorAll('#cancelProfile, #cancelProfileSecondary').forEach(button => button.addEventListener('click', () => profileDialog.close()));
+    profileForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const saveButton = document.getElementById('saveProfile');
+      saveButton.disabled = true;
+      profileStatus.textContent = 'Saving…';
+      profileNotice.classList.add('d-none');
+      try {
+        const response = await fetch('/api/profile', {
+          method: 'POST',
+          headers: {'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content},
+          body: new FormData(profileForm),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Profile could not be saved.');
+        const profile = result.profile;
+        document.getElementById('profileName').textContent = profile.full_name || profile.username;
+        const summary = document.querySelector('.profile-summary-main');
+        summary.querySelector('[data-profile-field="email"]').textContent = profile.email || 'Email not provided';
+        summary.querySelector('[data-profile-field="mobile_number"]').textContent = profile.mobile_number || 'Mobile number not provided';
+        const oldAvatar = document.getElementById('profileAvatar');
+        if (profile.avatar_url) {
+          const avatar = document.createElement('img');
+          avatar.id = 'profileAvatar'; avatar.className = 'profile-avatar'; avatar.alt = 'Profile image';
+          avatar.src = `${profile.avatar_url}?v=${Date.now()}`;
+          oldAvatar.replaceWith(avatar);
+        } else if (oldAvatar.tagName === 'IMG') {
+          const avatar = document.createElement('div'); avatar.id = 'profileAvatar'; avatar.className = 'profile-avatar profile-avatar-fallback'; avatar.setAttribute('role', 'img'); avatar.setAttribute('aria-label', 'Default profile avatar'); avatar.textContent = (profile.full_name || profile.username).slice(0, 1).toUpperCase(); oldAvatar.replaceWith(avatar);
+        }
+        profileDialog.close();
+        profileNotice.textContent = 'Profile updated.';
+        profileNotice.classList.remove('d-none');
+      } catch (error) { profileStatus.textContent = error.message; }
+      finally { saveButton.disabled = false; }
+    });
+  </script>
 </body>
 </html>

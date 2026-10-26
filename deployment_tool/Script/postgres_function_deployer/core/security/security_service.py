@@ -19,6 +19,10 @@ _schema_initialized = False
 _schema_init_lock = threading.Lock()
 
 
+class UserNotFoundError(LookupError):
+    pass
+
+
 def _config_from_url():
     value = APP_DATABASE_URL.strip()
 
@@ -257,39 +261,49 @@ def user_has_role(user_id, role_name):
     return role_name in user_roles(user_id)
 
 
+def _fetch_modules(cursor):
+    cursor.execute(
+        """
+                SELECT m.module_id,
+                             m.module_name,
+                             m.module_type,
+                             m.is_enabled,
+                             m.parent_menu_id,
+                             CASE WHEN assigned_parent.parent_menu_id IS NULL
+                                        THEN NULL ELSE assigned_parent.menu_name END AS submenu_name,
+                             CASE WHEN assigned_parent.parent_menu_id IS NULL
+                                        THEN assigned_parent.menu_name ELSE main_menu.menu_name END AS parent_menu_name
+                FROM app_security.modules AS m
+                LEFT JOIN app_security.menus AS assigned_parent
+                    ON assigned_parent.menu_id = m.parent_menu_id
+                LEFT JOIN app_security.menus AS main_menu
+                    ON main_menu.menu_id = COALESCE(
+                            assigned_parent.parent_menu_id, assigned_parent.menu_id
+                    )
+                WHERE m.is_active
+                ORDER BY COALESCE(main_menu.display_order, 0), main_menu.menu_name,
+                                 COALESCE(assigned_parent.display_order, 0), assigned_parent.menu_name,
+                                 m.display_order, m.module_name
+        """
+    )
+
+    columns = (
+                "module_id",
+                "module_name",
+                "module_type",
+                "is_enabled",
+                "parent_menu_id",
+                "submenu_name",
+                "parent_menu_name",
+    )
+
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def list_modules():
     with security_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT menu_id,
-                       menu_name,
-                       menu_code,
-                       route_path,
-                       parent_menu_id
-                FROM app_security.menus
-                WHERE is_active
-                  AND menu_type = 'INTERNAL'
-                  AND route_path IS NOT NULL
-                  AND menu_code <> 'DASHBOARD'
-                ORDER BY COALESCE(parent_menu_id, 0),
-                         display_order,
-                         menu_name
-                """
-            )
-
-            columns = (
-                "menu_id",
-                "menu_name",
-                "menu_code",
-                "route_path",
-                "parent_menu_id",
-            )
-
-            return [
-                dict(zip(columns, row))
-                for row in cur.fetchall()
-            ]
+            return _fetch_modules(cur)
 
 
 def user_module_ids(user_id):
@@ -983,6 +997,45 @@ def user_menus(user_id):
                 for row in cur.fetchall()
             ]
 
+            if is_admin:
+                cur.execute(
+                    """SELECT menu_id, parent_menu_id, menu_name, menu_code,
+                              menu_type, route_path, external_url, icon,
+                              display_order, open_in_new_tab
+                       FROM app_security.menus
+                       WHERE is_active AND menu_type = 'GROUP'"""
+                )
+                rows.extend(
+                    dict(zip(columns, row))
+                    for row in cur.fetchall()
+                )
+
+            from core.module_registry.module_service import list_available_modules
+
+            available_modules = list_available_modules(user_id, cursor=cur)
+            module_parent_ids = sorted(
+                {module["parent_menu_id"] for module in available_modules}
+            )
+            if module_parent_ids:
+                cur.execute(
+                    """SELECT menu_id, parent_menu_id, menu_name, menu_code,
+                              menu_type, route_path, external_url, icon,
+                              display_order, open_in_new_tab
+                       FROM app_security.menus
+                       WHERE menu_id = ANY(%s)
+                          OR menu_id IN (
+                              SELECT parent_menu_id
+                              FROM app_security.menus
+                              WHERE menu_id = ANY(%s)
+                                AND parent_menu_id IS NOT NULL
+                          )""",
+                    (module_parent_ids, module_parent_ids),
+                )
+                rows.extend(
+                    dict(zip(columns, row))
+                    for row in cur.fetchall()
+                )
+
     by_id = {
         row["menu_id"]: {
             **row,
@@ -1001,11 +1054,7 @@ def user_menus(user_id):
         else:
             roots.append(menu)
 
-    from core.module_registry.module_service import (
-        list_available_modules,
-    )
-
-    for module in list_available_modules(user_id):
+    for module in available_modules:
         parent_id = module["parent_menu_id"]
         parent = by_id.get(parent_id)
 
@@ -1033,14 +1082,14 @@ def user_menus(user_id):
                 "parent_menu_id": parent_id,
                 "menu_name": module["module_name"],
                 "menu_code": module["module_code"],
-                "menu_type": "INTERNAL",
-                "route_path": (
-                    f"/modules/{module['module_code']}/launch"
-                ),
-                "external_url": None,
+                "menu_type": module["module_type"],
+                "route_path": f"/modules/{module['module_code']}/launch",
+                "external_url": f"/modules/{module['module_code']}/launch"
+                if module["module_type"] == "EXTERNAL"
+                else None,
                 "icon": module["icon"],
                 "display_order": module["display_order"],
-                "open_in_new_tab": False,
+                "open_in_new_tab": module["module_type"] == "EXTERNAL",
                 "children": [],
             }
         )
@@ -1249,13 +1298,32 @@ def save_menu(data, menu_id=None):
             "External menus require an external URL."
         )
 
+    external_url = str(data.get("external_url") or "").strip() or None
+    if external_url:
+        parsed_external_url = urlparse(external_url)
+        if (
+            parsed_external_url.scheme not in {"http", "https"}
+            or not parsed_external_url.hostname
+            or parsed_external_url.username
+            or parsed_external_url.password
+        ):
+            raise ValueError("External menu URLs must use HTTP or HTTPS.")
+
+    parent_value = data.get("parent_menu_id")
+    try:
+        parent_menu_id = int(parent_value) if parent_value not in (None, "") else None
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Choose a valid parent menu.") from exc
+    if parent_menu_id is not None and parent_menu_id == menu_id:
+        raise ValueError("A menu cannot be its own parent.")
+
     values = (
-        data.get("parent_menu_id") or None,
+        parent_menu_id,
         data["menu_name"].strip(),
         data["menu_code"].strip().upper(),
         menu_type,
         data.get("route_path") or None,
-        data.get("external_url") or None,
+        external_url,
         data.get("icon") or "menu",
         int(data.get("display_order", 0)),
         bool(data.get("is_active", True)),
@@ -1264,6 +1332,16 @@ def save_menu(data, menu_id=None):
 
     with security_connection() as conn:
         with conn.cursor() as cur:
+            if parent_menu_id is not None:
+                parent_query = """SELECT 1 FROM app_security.menus
+                                  WHERE menu_id = %s AND is_active
+                                    AND menu_type = 'GROUP'"""
+                if menu_type == "GROUP":
+                    parent_query += " AND parent_menu_id IS NULL"
+                cur.execute(parent_query, (parent_menu_id,))
+                if not cur.fetchone():
+                    raise ValueError("Choose an active main menu or submenu as the parent.")
+
             if menu_id:
                 cur.execute(
                     """
@@ -1337,34 +1415,174 @@ def list_users(limit=50, offset=0, user_id=None):
 
     with security_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT *
-                FROM app_security.fn_get_users(%s, %s, %s)
-                """,
-                (
-                    limit,
-                    offset,
-                    user_id,
-                ),
-            )
+            return _fetch_users(cur, limit, offset, user_id)
 
-            columns = [
-                column.name
-                for column in cur.description
-            ]
 
-            return [
-                dict(zip(columns, row))
-                for row in cur.fetchall()
-            ]
+def _fetch_users(cursor, limit, offset, user_id=None):
+    cursor.execute(
+        """
+        SELECT *
+        FROM app_security.fn_get_users(%s, %s, %s)
+        """,
+        (limit, offset, user_id),
+    )
+
+    columns = [column.name for column in cursor.description]
+    users = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    for user in users:
+        user["module_ids"] = _normalize_module_ids(user.get("module_ids"))
+    return users
+
+
+def _fetch_searched_users(cursor, limit, offset, search):
+    escaped_search = (
+        search.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    )
+    pattern = f"%{escaped_search}%"
+    cursor.execute(
+        """SELECT COUNT(*)
+           FROM app_security.users
+           WHERE username ILIKE %s ESCAPE '!'
+              OR COALESCE(full_name, '') ILIKE %s ESCAPE '!'
+              OR COALESCE(email, '') ILIKE %s ESCAPE '!'""",
+        (pattern, pattern, pattern),
+    )
+    total = cursor.fetchone()[0]
+    cursor.execute(
+        """WITH page_users AS (
+               SELECT u.user_id, u.username, u.email, u.full_name, u.is_active,
+                      u.is_admin, u.created_at, u.last_login_at,
+                      u.module_access_configured
+               FROM app_security.users AS u
+               WHERE u.username ILIKE %s ESCAPE '!'
+                  OR COALESCE(u.full_name, '') ILIKE %s ESCAPE '!'
+                  OR COALESCE(u.email, '') ILIKE %s ESCAPE '!'
+               ORDER BY LOWER(u.username), u.user_id
+               LIMIT %s OFFSET %s
+           )
+           SELECT u.user_id, u.username, u.email, u.full_name, u.is_active,
+                  u.is_admin, u.created_at, u.last_login_at,
+                  COALESCE(role_data.roles, ''),
+                  CASE WHEN u.module_access_configured
+                       THEN COALESCE(assigned_modules.module_names, '')
+                       ELSE COALESCE(inherited_modules.module_names, '') END,
+                  CASE WHEN u.module_access_configured
+                       THEN COALESCE(assigned_modules.module_ids, '')
+                       ELSE COALESCE(inherited_modules.module_ids, '') END
+           FROM page_users AS u
+           LEFT JOIN LATERAL (
+               SELECT string_agg(r.role_name, ', ') AS roles
+               FROM app_security.user_roles AS ur
+               JOIN app_security.roles AS r ON r.role_id = ur.role_id
+               WHERE ur.user_id = u.user_id
+           ) AS role_data ON TRUE
+           LEFT JOIN LATERAL (
+                             SELECT string_agg(assigned.module_name, ', ') AS module_names,
+                                            string_agg(assigned.module_id::STRING, ',') AS module_ids
+                             FROM (
+                                     SELECT m.module_id, m.module_name
+                                     FROM app_security.user_module_access AS a
+                                     JOIN app_security.modules AS m ON m.module_id = a.module_id AND m.is_active
+                                     WHERE a.user_id = u.user_id
+                                     ORDER BY m.module_name, m.module_id
+                             ) AS assigned
+           ) AS assigned_modules ON TRUE
+           LEFT JOIN LATERAL (
+                             SELECT string_agg(inherited.module_name, ', ') AS module_names,
+                                            string_agg(inherited.module_id::STRING, ',') AS module_ids
+                             FROM (
+                                     SELECT DISTINCT m.module_id, m.module_name
+                                     FROM app_security.user_roles AS ur
+                                     JOIN app_security.roles AS r ON r.role_id = ur.role_id AND r.is_active
+                                     JOIN app_security.role_module_permissions AS p
+                                         ON p.role_id = r.role_id AND p.can_view
+                                     JOIN app_security.modules AS m ON m.module_id = p.module_id AND m.is_active
+                                     WHERE ur.user_id = u.user_id
+                             ) AS inherited
+           ) AS inherited_modules ON TRUE
+           ORDER BY LOWER(u.username), u.user_id""",
+        (pattern, pattern, pattern, limit, offset),
+    )
+    columns = [column.name for column in cursor.description]
+    users = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    for user in users:
+        user["module_ids"] = _normalize_module_ids(user.get("module_ids"))
+    return users, total
+
+
+def _normalize_module_ids(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        if value.startswith("{") and value.endswith("}"):
+            value = value[1:-1]
+        values = value.split(",") if value else []
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        raise TypeError("Database returned an unsupported module ID value.")
+
+    return [int(module_id) for module_id in values if str(module_id).strip()]
+
+
+def _parse_user_boolean(value, field_name):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+    raise ValueError(f"{field_name} must be true or false.")
 
 
 def validate_password(password):
+    if not isinstance(password, str):
+        raise ValueError("Password must be text.")
     if len(password or "") < 8:
         raise ValueError(
             "Password must be at least 8 characters long."
         )
+
+
+def _validated_user_text(data, field, label, max_length, required=False):
+    value = data.get(field, "")
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be text.")
+
+    value = value.strip()
+    if required and not value:
+        raise ValueError(f"{label} is required.")
+    if len(value) > max_length:
+        raise ValueError(f"{label} must be {max_length} characters or fewer.")
+    return value
+
+
+def _validated_role_id(value, required=False):
+    if value in (None, "") and not required:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("A valid role is required.")
+    try:
+        role_id = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid role is required.") from exc
+    if role_id < 1:
+        raise ValueError("A valid role is required.")
+    return role_id
+
+
+def _validated_email(data):
+    email = _validated_user_text(data, "email", "Email", 255)
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Enter a valid email address.")
+    return email or None
 
 
 def _save_user_modules(cursor, user_id, module_ids):
@@ -1379,11 +1597,9 @@ def _save_user_modules(cursor, user_id, module_ids):
     if normalized:
         cursor.execute(
             """
-            SELECT menu_id
-            FROM app_security.menus
-            WHERE is_active
-              AND menu_type = 'INTERNAL'
-              AND menu_id = ANY(%s)
+                        SELECT module_id
+                        FROM app_security.modules
+                        WHERE is_active AND module_id = ANY(%s)
             """,
             (normalized,),
         )
@@ -1400,7 +1616,7 @@ def _save_user_modules(cursor, user_id, module_ids):
 
     cursor.execute(
         """
-        DELETE FROM app_security.user_menu_access
+        DELETE FROM app_security.user_module_access
         WHERE user_id = %s
         """,
         (user_id,),
@@ -1408,15 +1624,9 @@ def _save_user_modules(cursor, user_id, module_ids):
 
     for module_id in normalized:
         cursor.execute(
-            """
-            INSERT INTO app_security.user_menu_access
-                (user_id, menu_id)
-            VALUES (%s, %s)
-            """,
-            (
-                user_id,
-                module_id,
-            ),
+            """INSERT INTO app_security.user_module_access (user_id, module_id)
+               VALUES (%s, %s)""",
+            (user_id, module_id),
         )
 
     cursor.execute(
@@ -1431,8 +1641,14 @@ def _save_user_modules(cursor, user_id, module_ids):
 
 def create_user(data):
     password = data.get("password", "")
+    username = _validated_user_text(data, "username", "Username", 100, required=True)
+    email = _validated_email(data)
+    full_name = _validated_user_text(data, "full_name", "Full name", 150) or username
+    is_active = _parse_user_boolean(
+        data.get("is_active", True), "is_active"
+    )
 
-    if not data.get("username") or not password:
+    if not password:
         raise ValueError(
             "Username and password are required."
         )
@@ -1444,7 +1660,7 @@ def create_user(data):
 
     validate_password(password)
 
-    role_id = data.get("role_id")
+    role_id = _validated_role_id(data.get("role_id"), required=True)
 
     if not role_id:
         raise ValueError(
@@ -1489,12 +1705,11 @@ def create_user(data):
                 RETURNING user_id
                 """,
                 (
-                    data["username"].strip(),
-                    data.get("email") or None,
-                    data.get("full_name")
-                    or data["username"],
+                    username,
+                    email,
+                    full_name,
                     password_hash(password),
-                    bool(data.get("is_active", True)),
+                    is_active,
                     is_admin,
                 ),
             )
@@ -1549,16 +1764,10 @@ def create_user(data):
 
 
 def update_user(user_id, data):
-    username = str(
-        data.get("username", "")
-    ).strip()
-
-    if not username:
-        raise ValueError(
-            "Username is required."
-        )
-
-    role_id = data.get("role_id")
+    username = _validated_user_text(data, "username", "Username", 100, required=True)
+    email = _validated_email(data)
+    full_name = _validated_user_text(data, "full_name", "Full name", 150) or username
+    role_id = _validated_role_id(data.get("role_id"))
 
     with security_connection() as conn:
         with conn.cursor() as cur:
@@ -1625,8 +1834,8 @@ def update_user(user_id, data):
                 else bool(was_admin)
             )
 
-            will_be_active = bool(
-                data.get("is_active", True)
+            will_be_active = _parse_user_boolean(
+                data.get("is_active", True), "is_active"
             )
 
             if "password" in data and data["password"]:
@@ -1695,8 +1904,8 @@ def update_user(user_id, data):
                 """,
                 (
                     username,
-                    data.get("email") or None,
-                    data.get("full_name") or username,
+                    email,
+                    full_name,
                     will_be_active,
                     bool(role_id),
                     will_be_admin,
@@ -1707,9 +1916,7 @@ def update_user(user_id, data):
             )
 
             if cur.rowcount != 1:
-                raise ValueError(
-                    "User was not found."
-                )
+                raise UserNotFoundError("User was not found.")
 
             if role_id:
                 cur.execute(
@@ -1781,9 +1988,7 @@ def update_user(user_id, data):
                 "USER_UPDATED",
                 user_id,
                 {
-                    "is_active": bool(
-                        data.get("is_active", True)
-                    )
+                    "is_active": will_be_active
                 },
             )
 
@@ -1802,35 +2007,186 @@ def update_user(user_id, data):
         conn.commit()
 
 
+def _fetch_roles(cursor):
+    cursor.execute(
+        """
+        SELECT role_id, role_name, role_description, is_active
+        FROM app_security.roles
+        ORDER BY role_name
+        """
+    )
+
+    columns = ("role_id", "role_name", "role_description", "is_active")
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def list_roles():
     with security_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    role_id,
-                    role_name,
-                    role_description,
-                    is_active
-                FROM app_security.roles
-                ORDER BY role_name
-                """
+            return _fetch_roles(cur)
+
+
+def list_user_management_data(limit=26, offset=0):
+    bounded_limit = max(1, min(int(limit), 101))
+    bounded_offset = max(0, int(offset))
+
+    with security_connection() as conn:
+        with conn.cursor() as cur:
+            return (
+                _fetch_users(cur, bounded_limit, bounded_offset),
+                _fetch_roles(cur),
+                _fetch_modules(cur),
             )
 
-            return [
-                dict(
-                    zip(
-                        (
-                            "role_id",
-                            "role_name",
-                            "role_description",
-                            "is_active",
-                        ),
-                        row,
-                    )
+
+def list_user_management_page(limit=11, offset=0, search=""):
+    search = str(search or "").strip()
+    if len(search) > 100:
+        raise ValueError("Search must be 100 characters or fewer.")
+    bounded_limit = max(1, min(int(limit), 101))
+    bounded_offset = max(0, int(offset))
+
+    with security_connection() as conn:
+        with conn.cursor() as cur:
+            if search:
+                users, total = _fetch_searched_users(
+                    cur, bounded_limit, bounded_offset, search
                 )
-                for row in cur.fetchall()
-            ]
+            else:
+                users = _fetch_users(cur, bounded_limit, bounded_offset)
+                cur.execute("SELECT COUNT(*) FROM app_security.users")
+                total = cur.fetchone()[0]
+            return users, _fetch_roles(cur), _fetch_modules(cur), total
+
+
+def _get_user_management_record(user_id):
+    user = next(iter(list_users(limit=1, user_id=user_id)), None)
+    if user is None:
+        return None
+
+    role_names = [name.strip() for name in (user.get("roles") or "").split(",") if name.strip()]
+    if user.get("is_admin") and "ADMIN" not in role_names:
+        role_names.append("ADMIN")
+    roles = list_roles()
+    selected_role = next(
+        (role for role in roles if role["role_name"] in role_names), None
+    )
+    modules_by_id = {module["module_id"]: module for module in list_modules()}
+    assigned_modules = []
+    for module_id in user.get("module_ids", []):
+        module = modules_by_id.get(module_id)
+        if module is None:
+            continue
+        assigned_modules.append(
+            {
+                "name": module["module_name"],
+                "parent_name": module.get("submenu_name"),
+                "main_menu_name": module.get("parent_menu_name"),
+            }
+        )
+
+    return {
+        "username": user["username"],
+        "full_name": user.get("full_name"),
+        "email": user.get("email"),
+        "is_active": user["is_active"],
+        "roles": role_names,
+        "role_id": str(selected_role["role_id"]) if selected_role else None,
+        "module_ids": [str(module_id) for module_id in user.get("module_ids", [])],
+        "modules": assigned_modules,
+    }
+
+
+def get_user_management_detail(user_id):
+    record = _get_user_management_record(user_id)
+    if record is None:
+        return None
+    return {
+        key: record[key]
+        for key in ("username", "full_name", "email", "is_active", "roles", "modules")
+    }
+
+
+def get_user_management_edit_data(user_id):
+    record = _get_user_management_record(user_id)
+    if record is None:
+        return None
+    return {
+        key: record[key]
+        for key in (
+            "username", "full_name", "email", "is_active", "role_id", "module_ids"
+        )
+    }
+
+
+def get_profile(user_id):
+    with security_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT u.username, u.full_name, u.email,
+                          p.mobile_number, p.avatar_key
+                   FROM app_security.users AS u
+                   LEFT JOIN app_security.user_profiles AS p
+                     ON p.user_id = u.user_id
+                   WHERE u.user_id = %s""",
+                (user_id,),
+            )
+            row = cur.fetchone()
+
+    if row is None:
+        return None
+    return dict(zip(("username", "full_name", "email", "mobile_number", "avatar_key"), row))
+
+
+def update_profile(user_id, data, avatar_key=None):
+    full_name = _validated_user_text(data, "full_name", "Full name", 150)
+    email = _validated_email(data)
+    mobile = _validated_user_text(data, "mobile_number", "Mobile number", 32)
+    if mobile and not re.fullmatch(r"[+0-9() .-]{5,32}", mobile):
+        raise ValueError("Mobile number contains unsupported characters.")
+    if avatar_key is not None and not re.fullmatch(r"[a-f0-9]{40}\.webp", avatar_key):
+        raise ValueError("Profile image reference is invalid.")
+
+    with security_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE app_security.users
+                   SET full_name = %s, email = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE user_id = %s""",
+                (full_name or None, email, user_id),
+            )
+            if cur.rowcount != 1:
+                raise UserNotFoundError("User was not found.")
+
+            if avatar_key is None:
+                cur.execute(
+                    """INSERT INTO app_security.user_profiles (user_id, mobile_number)
+                       VALUES (%s, %s)
+                       ON CONFLICT (user_id) DO UPDATE SET
+                           mobile_number = EXCLUDED.mobile_number,
+                           updated_at = CURRENT_TIMESTAMP""",
+                    (user_id, mobile or None),
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO app_security.user_profiles
+                           (user_id, mobile_number, avatar_key)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (user_id) DO UPDATE SET
+                           mobile_number = EXCLUDED.mobile_number,
+                           avatar_key = EXCLUDED.avatar_key,
+                           updated_at = CURRENT_TIMESTAMP""",
+                    (user_id, mobile or None, avatar_key),
+                )
+        conn.commit()
+
+    return {
+        "username": str(data.get("username", "")),
+        "full_name": full_name or None,
+        "email": email,
+        "mobile_number": mobile or None,
+        "avatar_key": avatar_key,
+    }
 
 
 def list_role_permissions(role_id):
