@@ -2,7 +2,7 @@ import ipaddress
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 
 from core.module_registry import module_service
@@ -65,16 +65,30 @@ class FakePermissionConnection:
 
 
 class FakeRegistryCursor:
-    def __init__(self):
+    def __init__(self, existing_module=None):
         self.executed = []
         self.result = None
+        self.existing_module = existing_module
 
     def execute(self, query, parameters=()):
         self.executed.append((query, parameters))
         if query.lstrip().startswith("INSERT INTO app_security.modules"):
-            self.result = {
+            self.result = None if self.existing_module else {
                 "module_id": 25, "module_code": "DB_SCHEMA_TRACKER",
-                "module_name": "DB Schema Tracker", "is_enabled": False,
+                "module_name": "DB Schema Tracker", "module_type": "EXTERNAL",
+                "web_url": "https://module.example/app", "is_active": True,
+                "is_enabled": False,
+            }
+        elif query.lstrip().startswith("SELECT") and "FOR UPDATE" in query:
+            self.result = self.existing_module
+        elif query.lstrip().startswith("UPDATE app_security.modules") and "RETURNING module_code" in query:
+            self.result = ("DB_SCHEMA_TRACKER",)
+        elif query.lstrip().startswith("UPDATE app_security.modules"):
+            self.result = {
+                **self.existing_module,
+                "module_name": parameters[0],
+                "web_url": parameters[3],
+                "is_active": True,
             }
         elif "RETURNING module_code" in query:
             self.result = ("DB_SCHEMA_TRACKER",)
@@ -90,8 +104,8 @@ class FakeRegistryCursor:
 
 
 class FakeRegistryConnection:
-    def __init__(self):
-        self.cursor_instance = FakeRegistryCursor()
+    def __init__(self, existing_module=None):
+        self.cursor_instance = FakeRegistryCursor(existing_module)
         self.committed = False
 
     def cursor(self, cursor_factory=None):
@@ -140,6 +154,89 @@ class ModuleServiceTests(unittest.TestCase):
 
         self.assertEqual(result["module_code"], "DB_SCHEMA_TRACKER")
         self.assertEqual(result["capabilities"], ["schema-read"])
+
+    def test_web_only_registration_skips_json_requests(self):
+        web_url = "https://db-schema-tracker-1.onrender.com/"
+        with patch.object(module_service, "_validate_url", return_value=web_url), patch.object(
+            module_service, "_fetch_json"
+        ) as fetch_json:
+            result = module_service.validate_module_registration({"web_url": web_url})
+
+        fetch_json.assert_not_called()
+        self.assertEqual(result["module_code"], "DB_SCHEMA_TRACKER_1")
+        self.assertEqual(result["module_name"], "Db Schema Tracker 1")
+        self.assertEqual(result["version"], "1.0.0")
+        self.assertIsNone(result["api_base_url"])
+        self.assertIsNone(result["manifest_url"])
+        self.assertIsNone(result["health_url"])
+        self.assertEqual(result["health_status"], "UNKNOWN")
+        self.assertEqual(result["validation_mode"], "web-only")
+
+    def test_registration_requires_a_web_or_api_endpoint(self):
+        with self.assertRaisesRegex(ValueError, "A web URL or API endpoint is required"):
+            module_service.validate_module_registration({})
+
+    def test_api_endpoint_html_has_specific_validation_error(self):
+        url = "https://module.example/api"
+        parsed = urlsplit(url)
+        connection = FakeHTTPSConnection(content=b"<!doctype html><title>Not JSON</title>")
+        with patch.object(
+            module_service, "_resolve_safe_url",
+            return_value=(url, parsed, 443, [ipaddress.ip_address("93.184.216.34")]),
+        ), patch.object(module_service, "_PinnedHTTPSConnection", return_value=connection):
+            with self.assertRaisesRegex(ValueError, "API endpoint validation failed: expected JSON"):
+                module_service._fetch_json(url, endpoint_name="API endpoint")
+
+    def test_api_manifest_without_health_endpoint_is_valid(self):
+        manifest = {
+            "module_code": "DB_SCHEMA_TRACKER", "module_name": "DB Schema Tracker",
+            "version": "1.2.3", "web_url": "https://module.example/app",
+            "api_base_url": "https://module.example/api",
+        }
+        with patch.object(module_service, "_validate_url", side_effect=lambda value, _field: value), patch.object(
+            module_service, "_fetch_json", return_value=manifest,
+        ) as fetch_json:
+            result = module_service.validate_module_registration(
+                {"manifest_url": "https://module.example/api/module-manifest"}
+            )
+
+        fetch_json.assert_called_once_with(
+            "https://module.example/api/module-manifest", endpoint_name="Manifest endpoint"
+        )
+        self.assertIsNone(result["health_url"])
+        self.assertEqual(result["health_status"], "UNKNOWN")
+        self.assertEqual(result["validation_mode"], "api-enabled")
+
+    def test_api_only_registration_requires_json_and_uses_api_url_as_launch_url(self):
+        api_url = "https://module.example/api"
+        api_response = {"module_code": "DB_SCHEMA_TRACKER", "version": "1.2.3"}
+        with patch.object(module_service, "_validate_url", side_effect=lambda value, _field: value), patch.object(
+            module_service, "_fetch_json", return_value=api_response,
+        ) as fetch_json:
+            result = module_service.validate_module_registration({"api_base_url": api_url})
+
+        fetch_json.assert_called_once_with(api_url, endpoint_name="API endpoint")
+        self.assertEqual(result["web_url"], api_url)
+        self.assertEqual(result["module_name"], "Module")
+        self.assertEqual(result["validation_mode"], "api-enabled")
+
+    def test_external_health_check_without_health_url_is_unknown_not_down(self):
+        module = {
+            "module_code": "DB_SCHEMA_TRACKER", "version": "1.2.3",
+            "module_type": "EXTERNAL", "health_url": None,
+        }
+        read_connection = MagicMock()
+        read_cursor = read_connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        read_cursor.fetchone.return_value = module
+        write_connection = MagicMock()
+        with patch.object(
+            module_service, "security_connection", side_effect=[read_connection, write_connection]
+        ), patch.object(module_service, "_fetch_json") as fetch_json:
+            result = module_service.check_module_health(module_id=25, actor_id=8)
+
+        fetch_json.assert_not_called()
+        self.assertEqual(result["health_status"], "UNKNOWN")
+        self.assertIn("No health endpoint", result["detail"])
 
     def test_manifest_health_must_match_code_and_version(self):
         manifest = {
@@ -220,7 +317,75 @@ class ModuleServiceTests(unittest.TestCase):
         self.assertFalse(record["is_enabled"])
         statements = [query for query, _parameters in connection.cursor_instance.executed]
         self.assertIn("INSERT INTO app_security.role_module_permissions", statements[1])
-        self.assertIn("MODULE_REGISTERED", statements[2])
+        self.assertEqual(connection.cursor_instance.executed[2][1][1], "MODULE_REGISTERED")
+        self.assertTrue(connection.committed)
+
+    def test_same_code_and_url_reuses_existing_registration(self):
+        existing = {
+            "module_id": 41, "module_code": "DB_SCHEMA_TRACKER_1", "module_type": "EXTERNAL",
+            "web_url": "https://DB-SCHEMA-TRACKER-1.onrender.com", "is_enabled": False,
+            "is_active": False,
+        }
+        manifest = {
+            "module_code": "DB_SCHEMA_TRACKER_1", "module_name": "DB Schema Tracker 1",
+            "description": "", "version": "1.0.0", "web_url": "https://db-schema-tracker-1.onrender.com/",
+            "api_base_url": None, "manifest_url": None, "health_url": None,
+            "entry_path": "/", "icon": "database", "capabilities": [], "health_status": "UNKNOWN",
+        }
+        connection = FakeRegistryConnection(existing)
+        with patch.object(module_service, "security_connection", return_value=connection):
+            record = module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=10)
+
+        statements = connection.cursor_instance.executed
+        self.assertTrue(record["registration_reused"])
+        self.assertFalse(record["is_enabled"])
+        self.assertTrue(record["is_active"])
+        self.assertEqual(record["module_id"], 41)
+        self.assertEqual(sum(query.lstrip().startswith("INSERT INTO app_security.modules") for query, _ in statements), 1)
+        self.assertIn("ON CONFLICT (module_code) DO NOTHING", statements[0][0])
+        self.assertIn("is_active = TRUE", statements[2][0])
+        self.assertNotIn("is_enabled =", statements[2][0])
+        self.assertEqual(statements[-1][1][1], "MODULE_REGISTRATION_REUSED")
+        self.assertTrue(connection.committed)
+
+    def test_same_code_and_different_url_raises_clear_conflict(self):
+        existing = {
+            "module_id": 41, "module_code": "DB_SCHEMA_TRACKER_1", "module_type": "EXTERNAL",
+            "web_url": "https://db-schema-tracker-1.onrender.com/", "is_enabled": False,
+            "is_active": True,
+        }
+        manifest = {
+            "module_code": "DB_SCHEMA_TRACKER_1", "module_name": "Other Tracker",
+            "description": "", "version": "1.0.0", "web_url": "https://another-schema-tracker.onrender.com/",
+            "api_base_url": None, "manifest_url": None, "health_url": None,
+            "entry_path": "/", "icon": "database", "capabilities": [], "health_status": "UNKNOWN",
+        }
+        connection = FakeRegistryConnection(existing)
+        with patch.object(module_service, "security_connection", return_value=connection):
+            with self.assertRaisesRegex(
+                module_service.ModuleCodeConflictError,
+                "Module code DB_SCHEMA_TRACKER_1 is already registered for another external application",
+            ):
+                module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=10)
+
+        self.assertFalse(connection.committed)
+        self.assertEqual(len(connection.cursor_instance.executed), 2)
+
+    def test_web_only_registration_stores_null_api_urls_and_can_be_enabled(self):
+        web_url = "https://db-schema-tracker-1.onrender.com/"
+        connection = FakeRegistryConnection()
+        with patch.object(module_service, "_validate_url", return_value=web_url):
+            module = module_service.validate_module_registration({"web_url": web_url})
+        with patch.object(module_service, "security_connection", return_value=connection):
+            record = module_service.register_module(module, actor_id=8, parent_menu_id=4, display_order=10)
+            enabled = module_service.set_module_enabled(record["module_id"], True, actor_id=8)
+
+        insert_parameters = connection.cursor_instance.executed[0][1]
+        insert_query = connection.cursor_instance.executed[0][0]
+        self.assertEqual(insert_parameters[4:8], (web_url, None, None, None))
+        self.assertEqual(insert_parameters[12:14], ("UNKNOWN", "UNKNOWN"))
+        self.assertEqual(insert_query.count("%s"), len(insert_parameters))
+        self.assertTrue(enabled)
         self.assertTrue(connection.committed)
 
     def test_deregistration_disables_without_deleting_registry_data(self):
@@ -237,6 +402,130 @@ class ModuleServiceTests(unittest.TestCase):
         seed = script.split("ON CONFLICT (module_code) DO UPDATE SET", 1)[1].split(";", 1)[0]
         self.assertNotIn("is_enabled =", seed)
         self.assertNotIn("is_active =", seed)
+
+    def test_external_module_schema_allows_missing_manifest_and_health_urls(self):
+        script = (Path(__file__).resolve().parents[2] / "database" / "database_security.sql").read_text(encoding="utf-8")
+        table = script.split("CREATE TABLE IF NOT EXISTS app_security.modules (", 1)[1].split(
+            "CREATE TABLE IF NOT EXISTS app_security.role_module_permissions", 1
+        )[0]
+        self.assertIn("modules_optional_external_api_urls_check", table)
+        self.assertIn("manifest_url IS NULL OR manifest_url ~ '^https://'", table)
+        self.assertIn("health_url IS NULL OR health_url ~ '^https://'", table)
+        self.assertIn("pg_get_constraintdef(oid) LIKE '%manifest_url IS NOT NULL%'", script)
+
+    def test_web_only_module_routes_validate_register_enable_and_launch(self):
+        import socket
+
+        import app as app_module
+
+        app = app_module.app
+        web_url = "https://db-schema-tracker-1.onrender.com/"
+        registered = {}
+
+        def save_module(module, _actor_id, parent_menu_id, display_order):
+            registration_reused = bool(registered)
+            registered.update(module)
+            registered.update(
+                module_id=65, parent_menu_id=parent_menu_id, display_order=display_order,
+                is_enabled=registered.get("is_enabled", False), is_active=True,
+                registration_reused=registration_reused,
+            )
+            return registered
+
+        def enable_module(_module_id, enabled, _actor_id):
+            registered["is_enabled"] = enabled
+            return enabled
+
+        with patch.object(app_module, "ensure_security_initialized", return_value=True), patch.object(
+            app_module, "user_session_state",
+            return_value={"is_active": True, "session_version": "test", "must_change_password": False},
+        ), patch.object(app_module, "user_menus", return_value=[]), patch.object(
+            app_module, "user_roles", return_value=["ADMIN"],
+        ), patch.object(app_module, "require_permission"), patch.object(
+            app_module, "list_parent_menus", return_value=[{"menu_id": 44, "menu_name": "Database Operation Module"}],
+        ), patch.object(app_module, "register_module", side_effect=save_module), patch.object(
+            app_module, "set_module_enabled", side_effect=enable_module,
+        ), patch.object(app_module, "module_permission", return_value=True), patch.object(
+            app_module, "get_launch_target",
+            return_value={"module_type": "EXTERNAL", "web_url": web_url, "entry_path": "/"},
+        ), patch.object(
+            module_service.socket, "getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
+        ), patch.object(module_service, "_allowed_hosts", return_value=set()):
+            with app.test_client() as client:
+                with client.session_transaction() as user_session:
+                    user_session.update(
+                        user_id=7, username="admin", session_version="test", _csrf_token="csrf-test",
+                    )
+                headers = {"X-CSRFToken": "csrf-test"}
+                payload = {
+                    "web_url": web_url, "api_base_url": "",
+                    "manifest_url": "", "health_url": "",
+                }
+
+                validated = client.post("/api/admin/modules/validate", json=payload, headers=headers)
+                self.assertEqual(validated.status_code, 200)
+                self.assertEqual(validated.json["validation_mode"], "web-only")
+
+                registered_response = client.post(
+                    "/api/admin/modules",
+                    json={**payload, "parent_menu_id": 44, "display_order": 10},
+                    headers=headers,
+                )
+                self.assertEqual(registered_response.status_code, 201)
+                self.assertEqual(
+                    (registered["api_base_url"], registered["manifest_url"], registered["health_url"]),
+                    (None, None, None),
+                )
+
+                duplicate = client.post(
+                    "/api/admin/modules",
+                    json={**payload, "parent_menu_id": 44, "display_order": 10},
+                    headers=headers,
+                )
+                self.assertEqual(duplicate.status_code, 200)
+                self.assertTrue(duplicate.json["already_registered"])
+                self.assertIn("already registered but disabled", duplicate.json["message"])
+
+                enabled = client.put(
+                    "/api/admin/modules/65/enabled", json={"enabled": True}, headers=headers,
+                )
+                self.assertEqual(enabled.status_code, 200)
+                self.assertTrue(enabled.json["is_enabled"])
+
+                duplicate_enabled = client.post(
+                    "/api/admin/modules",
+                    json={**payload, "parent_menu_id": 44, "display_order": 10},
+                    headers=headers,
+                )
+                self.assertEqual(duplicate_enabled.status_code, 200)
+                self.assertTrue(duplicate_enabled.json["is_enabled"])
+                self.assertIn("already registered and enabled", duplicate_enabled.json["message"])
+
+                launched = client.get("/modules/DB_SCHEMA_TRACKER_1/launch")
+                self.assertEqual(launched.status_code, 302)
+                self.assertEqual(launched.headers["Location"], web_url)
+
+                conflicting_manifest = {
+                    "module_code": "DB_SCHEMA_TRACKER_1", "module_name": "Other Tracker",
+                    "version": "1.0.0", "web_url": "https://another-schema-tracker.onrender.com/",
+                    "api_base_url": None, "manifest_url": None, "health_url": None,
+                    "entry_path": "/", "icon": "database", "capabilities": [],
+                }
+                with patch.object(
+                    app_module, "validate_module_registration", return_value=conflicting_manifest,
+                ), patch.object(
+                    app_module, "register_module",
+                    side_effect=module_service.ModuleCodeConflictError("DB_SCHEMA_TRACKER_1"),
+                ):
+                    conflict = client.post(
+                        "/api/admin/modules",
+                        json={"web_url": conflicting_manifest["web_url"], "parent_menu_id": 44},
+                        headers=headers,
+                    )
+                self.assertEqual(conflict.status_code, 409)
+                self.assertEqual(conflict.json["code"], "MODULE_CODE_CONFLICT")
+                self.assertIn("another external application", conflict.json["error"])
 
 
 if __name__ == "__main__":

@@ -251,7 +251,7 @@ def create_bootstrap_admin(data, configured_passkey):
     try:
         with security_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_xact_lock(94825731)")
+                #cur.execute("SELECT pg_advisory_xact_lock(94825731)")
                 cur.execute(
                     "INSERT INTO app_security.roles (role_name, role_description, is_active) VALUES ('ADMIN', 'Full application administration', TRUE) ON CONFLICT (role_name) DO UPDATE SET is_active = TRUE RETURNING role_id"
                 )
