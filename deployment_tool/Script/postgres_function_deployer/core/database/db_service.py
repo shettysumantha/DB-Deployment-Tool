@@ -8,17 +8,26 @@ REQUIRED_FIELDS = ("host", "port", "database", "username", "password")
 
 def clean_config(payload):
     values = {field: str(payload.get(field, "")).strip() for field in REQUIRED_FIELDS}
+
     if not all(values.values()):
         raise ValueError("Host, port, database, username, and password are required.")
+
     try:
         values["port"] = int(values["port"])
     except ValueError as exc:
         raise ValueError("Port must be a number.") from exc
+
     if not 1 <= values["port"] <= 65535:
         raise ValueError("Port must be between 1 and 65535.")
+
     sslmode = str(payload.get("sslmode", "")).strip()
     if sslmode:
         values["sslmode"] = sslmode
+
+    sslrootcert = str(payload.get("sslrootcert", "")).strip()
+    if sslrootcert:
+        values["sslrootcert"] = sslrootcert
+
     return values
 
 
@@ -33,10 +42,17 @@ def connection(config):
         "connect_timeout": 10,
         "application_name": "postgres-function-deployer",
     }
+
     sslmode = str(config.get("sslmode", "")).strip()
     if sslmode:
         connection_kwargs["sslmode"] = sslmode
+
+    sslrootcert = str(config.get("sslrootcert", "")).strip()
+    if sslrootcert:
+        connection_kwargs["sslrootcert"] = sslrootcert
+
     conn = psycopg2.connect(**connection_kwargs)
+
     try:
         yield conn
     finally:
@@ -48,7 +64,11 @@ def test_connection(config):
         with conn.cursor() as cursor:
             cursor.execute("SELECT current_database(), inet_server_addr()::text")
             database, server_address = cursor.fetchone()
-    return {"database": database, "server_address": server_address}
+
+    return {
+        "database": database,
+        "server_address": server_address
+    }
 
 
 def safe_error(error, secret=""):
