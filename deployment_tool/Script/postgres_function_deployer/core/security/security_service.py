@@ -48,7 +48,7 @@ def _config_from_url():
         "username": unquote(parsed.username or ""),
         "password": unquote(parsed.password or ""),
         "sslmode": query.get("sslmode", ["require"])[0],
-        "sslrootcert": query.get("sslrootcert", ["system"])[0],
+        "sslrootcert": query.get("sslrootcert", [""])[0],
     }
 
 
