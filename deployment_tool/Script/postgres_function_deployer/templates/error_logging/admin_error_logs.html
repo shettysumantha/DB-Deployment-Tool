@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Application Error Logs | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+  <link rel="stylesheet" href="/static/shared/css/error-logs.css?v=1">
+</head>
+<body class="app-page">
+  {% include 'shared/partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>Application Error Logs</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content admin-content">
+    <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Application Error Logs</h1></div></header>
+    <p class="notice">Recent application error-level log entries. Request bodies, passwords, and stack traces are not stored.</p>
+    {% if log_error %}<p class="notice error" role="alert">{{ log_error }}</p>{% endif %}
+    <section class="admin-section">
+      <div class="admin-section-heading"><h2>Recent errors</h2><span>Page {{ page }} · {{ page_size }} records per page</span></div>
+      <div class="table-wrap admin-table-wrap error-log-table-wrap">
+        <table class="admin-databases-table error-log-table">
+          <thead><tr><th>Time</th><th>Level</th><th>Type</th><th>Endpoint</th><th>User</th><th>Request ID</th><th>Error message</th></tr></thead>
+          <tbody>
+            {% for item in logs %}
+              <tr>
+                <td>{{ item.logged_at.isoformat() if item.logged_at else '' }}</td>
+                <td>{{ item.log_level }}</td>
+                <td>{{ item.error_type or '' }}</td>
+                <td>{{ item.http_method or '' }} {{ item.endpoint or '' }}{% if item.http_status %} ({{ item.http_status }}){% endif %}</td>
+                <td>{{ item.username or '' }}</td>
+                <td>{{ item.request_id or '' }}</td>
+                <td class="error-log-message">{{ item.error_message }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="7" class="empty-state">No application error logs on this page.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <nav class="error-log-pagination" aria-label="Error log pages">
+        {% if page > 1 %}<a class="btn btn-secondary" href="{{ url_for('admin_error_logs', page=page - 1) }}">Newer errors</a>{% endif %}
+        {% if logs|length == page_size %}<a class="btn btn-secondary" href="{{ url_for('admin_error_logs', page=page + 1) }}">Older errors</a>{% endif %}
+      </nav>
+    </section>
+  </main>
+</body>
+</html>

@@ -102,7 +102,7 @@ The DBA must manually execute `database_security.sql` in PostgreSQL/DB Solo befo
 .\.venv\Scripts\python.exe init_security.py
 ```
 
-For an existing application database, manually apply each new SQL migration under `database/migrations/` before using its feature. The module endpoint catalog requires `database/migrations/20261101_module_endpoint_catalog.sql`; new installations receive the same catalog from `database_security.sql`. Migrations are never run automatically by Flask.
+For an existing application database, manually apply each new SQL migration under `database/migrations/` before using its feature. The module endpoint catalog and application error log table require `database/migrations/20261101_module_endpoint_catalog.sql`; new installations receive the same schema from `database_security.sql`. The migration uses CockroachDB-compatible PostgreSQL syntax. Migrations are never run automatically by Flask.
 
 ### Module registry
 
@@ -117,6 +117,10 @@ Admins can create users and assign multiple modules from the existing `app_secur
 Forgot-password reset tokens are stored hashed and expire after 20 minutes. Configure the existing Brevo SMTP variables to deliver reset links. For local development with `FLASK_DEBUG=true`, a reset link is written only to the server log when delivery cannot be used. Password reset responses do not disclose whether an account exists.
 
 The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
+
+### Application error logs
+
+Error-level application log events are written to `public.tbl_errorlogs` with a database timestamp, error type and message, route, HTTP method/status when available, signed-in user, and request ID. Request bodies and stack traces are not stored, and common password/token values are redacted. Admins can review recent entries at `/admin/error-logs`; the page is not available to other roles. Apply the migration before expecting database-persisted logs. If the application database or table is unavailable, the application continues logging to its normal server output and reports the database-log write failure there.
 
 ### Active connection tools
 

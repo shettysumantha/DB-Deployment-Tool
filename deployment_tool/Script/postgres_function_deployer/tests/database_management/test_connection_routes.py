@@ -168,6 +168,38 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
         self.assertIn(b"PostgreSQL health", response.data)
         self.assertIn(b"Restricted SQL query", response.data)
 
+    def test_error_log_page_is_admin_only_and_shows_recent_logs(self):
+        logged_error = {
+            "error_id": 1,
+            "logged_at": None,
+            "log_level": "ERROR",
+            "error_type": "RuntimeError",
+            "error_message": "test failure",
+            "endpoint": "/admin/modules",
+            "http_method": "GET",
+            "http_status": 500,
+            "username": "admin",
+            "request_id": "test-request",
+        }
+        with patch.object(self.app_module, "user_has_role", return_value=True), patch.object(
+            self.app_module, "list_error_logs", return_value=[logged_error]
+        ) as list_error_logs:
+            response = self.client.get("/admin/error-logs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Application Error Logs", response.data)
+        self.assertIn(b"test failure", response.data)
+        list_error_logs.assert_called_once_with(100, 0)
+
+    def test_error_log_page_denies_non_admin_users(self):
+        with patch.object(self.app_module, "user_has_role", return_value=False), patch.object(
+            self.app_module, "list_error_logs"
+        ) as list_error_logs:
+            response = self.client.get("/admin/error-logs")
+
+        self.assertEqual(response.status_code, 403)
+        list_error_logs.assert_not_called()
+
     def test_database_health_uses_only_the_active_saved_connection(self):
         record = {
             "id": 22,

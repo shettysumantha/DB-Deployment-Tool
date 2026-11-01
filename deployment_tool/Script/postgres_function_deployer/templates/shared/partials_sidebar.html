@@ -38,6 +38,7 @@
     <a class="sidebar-active-tools" href="{{ url_for('database_tools_page') }}">Open database tools</a>
   </section>
   <a class="sidebar-link{% if request.path == '/profile' or request.path == '/profile/password' %} active{% endif %}" href="/profile" title="Profile"><span class="sidebar-icon">◎</span><span>Profile</span></a>
+  {% if 'ADMIN' in current_roles %}<a class="sidebar-link{% if request.path == '/admin/error-logs' %} active{% endif %}" href="{{ url_for('admin_error_logs') }}" title="Error Logs"><span class="sidebar-icon">!</span><span>Error Logs</span></a>{% endif %}
   <nav aria-label="Application navigation">{% for menu in sidebar_menus if menu.menu_code not in hidden_root_menu_codes %}{{ render_menu(menu) }}{% endfor %}</nav>
   <div class="sidebar-user"><span>{{ session.get('username') }}</span><small>{{ current_roles|join(' / ') }}</small><form method="post" action="{{ url_for('logout_route') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="sidebar-link" type="submit" title="Sign out"><span class="sidebar-icon">↪</span><span>Sign out</span></button></form></div>
 </aside>

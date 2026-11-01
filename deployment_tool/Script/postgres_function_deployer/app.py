@@ -14,10 +14,12 @@ from flask import Flask, abort, flash, g, jsonify, redirect, render_template, re
 from PIL import Image, ImageOps, UnidentifiedImageError
 import psycopg2
 from psycopg2.errors import CheckViolation, UniqueViolation
+from werkzeug.exceptions import HTTPException, InternalServerError
 
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
 from core.ai_assistant.ollama_service import AssistantError, UnsafePromptError, assistant_enabled, configured_model, generate_answer
 from core.database.db_service import clean_config, safe_error, test_connection
+from core.error_logging import DatabaseErrorLogHandler, list_error_logs
 from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_api_endpoints, list_available_modules, list_module_api_endpoint_assignments, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
 from core.security.security_service import UserNotFoundError, admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, get_profile, get_user_management_detail, get_user_management_edit_data, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_user_management_data, list_user_management_page, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_profile, update_user, user_has_role, user_menus, user_roles, user_session_state
 from modules.database_management.credential_service import connection_config, delete_database, get_database, get_database_password, list_databases, save_database, update_database
@@ -72,6 +74,12 @@ def ensure_security_initialized():
 with app.app_context():
     ensure_security_initialized()
 
+if not any(
+    isinstance(handler, DatabaseErrorLogHandler)
+    for handler in app.logger.handlers
+):
+    app.logger.addHandler(DatabaseErrorLogHandler())
+
 
 def bootstrap_rate_limited(remote_addr):
     now = time.monotonic()
@@ -106,6 +114,27 @@ def not_found(_error):
     return render_template("shared/error.html", code=404, title="Page Not Found", message="The requested page could not be found."), 404
 
 
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    if isinstance(error, HTTPException) and not isinstance(error, InternalServerError):
+        return error
+
+    original = getattr(error, "original_exception", None) or error
+    g.error_http_status = 500
+    app.logger.error(
+        "Unhandled application error",
+        exc_info=(type(original), original, original.__traceback__),
+    )
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "An internal server error occurred."}), 500
+    return render_template(
+        "shared/error.html",
+        code=500,
+        title="Internal Server Error",
+        message="The server encountered an internal error. Contact an administrator with the request ID.",
+    ), 500
+
+
 # @app.before_request
 # def enforce_login():
 #     if request.endpoint in {"login", "health", "static"} or request.path.startswith("/static/"):
@@ -119,12 +148,15 @@ def not_found(_error):
 
 @app.before_request
 def start_request_metrics():
+    g.request_id = secrets.token_hex(16)
     if not request.path.startswith("/static/") and request.path != "/health":
         g.request_started_at = time.perf_counter()
 
 
 @app.after_request
 def record_request_metrics(response):
+    if hasattr(g, "request_id"):
+        response.headers["X-Request-ID"] = g.request_id
     started_at = getattr(g, "request_started_at", None)
     if started_at is not None:
         sample = {
@@ -625,7 +657,7 @@ def dashboard_metrics_api():
     errors = sum(sample["status"] >= 500 for sample in samples)
     recommendations = []
     if errors:
-        recommendations.append("Review recent server errors in application logs.")
+        recommendations.append("Review recent server errors in Admin → Error Logs.")
     if durations and durations[p95_index] >= 750:
         recommendations.append("Inspect the slowest endpoints for database waits or expensive work.")
     if not recommendations:
@@ -684,6 +716,31 @@ def _user_mutation_error(error, action):
 def require_any_permission(*menu_codes, permission="can_view"):
     if not any(_permission_granted(code, permission) for code in menu_codes):
         abort(403)
+
+
+@app.get("/admin/error-logs")
+def admin_error_logs():
+    if not user_has_role(session["user_id"], "ADMIN"):
+        abort(403)
+    page = max(1, request.args.get("page", 1, type=int) or 1)
+    page_size = 100
+    try:
+        logs = list_error_logs(page_size, (page - 1) * page_size)
+        log_error = None
+    except psycopg2.Error:
+        app.logger.exception("Application error log records could not be loaded")
+        logs = []
+        log_error = (
+            "The error log table is unavailable. Apply "
+            "database/migrations/20261101_module_endpoint_catalog.sql."
+        )
+    return render_template(
+        "error_logging/admin_error_logs.html",
+        logs=logs,
+        page=page,
+        page_size=page_size,
+        log_error=log_error,
+    )
 
 
 @app.get("/api/menus")

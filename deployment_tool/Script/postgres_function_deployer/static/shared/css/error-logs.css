@@ -1,0 +1,20 @@
+.error-log-table-wrap {
+  overflow-x: auto;
+}
+
+.error-log-table {
+  min-width: 1100px;
+}
+
+.error-log-message {
+  max-width: 560px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.error-log-pagination {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
