@@ -16,6 +16,7 @@ import psycopg2
 from psycopg2.errors import CheckViolation, UniqueViolation
 
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
+from core.ai_assistant.ollama_service import AssistantError, UnsafePromptError, assistant_enabled, configured_model, generate_answer
 from core.database.db_service import clean_config, safe_error, test_connection
 from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
 from core.security.security_service import UserNotFoundError, admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, get_profile, get_user_management_detail, get_user_management_edit_data, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_user_management_data, list_user_management_page, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_profile, update_user, user_has_role, user_menus, user_roles, user_session_state
@@ -562,7 +563,39 @@ def logout_route():
 def dashboard():
     return render_template(
         "shared/dashboard.html",
+        assistant_enabled=assistant_enabled(),
     )
+
+
+@app.get("/assistant")
+def assistant_page():
+    return render_template(
+        "ai_assistant/index.html",
+        assistant_enabled=assistant_enabled(),
+        assistant_model=configured_model(),
+    )
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat_api():
+    if not assistant_enabled():
+        return jsonify({"error": "The local AI assistant is disabled."}), 503
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    prompt = payload.get("message")
+    if not isinstance(prompt, str):
+        return jsonify({"error": "Enter a question for the assistant."}), 400
+
+    try:
+        answer = generate_answer(prompt)
+    except UnsafePromptError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except AssistantError as exc:
+        return jsonify({"error": str(exc)}), 503
+
+    return jsonify({"answer": answer})
 
 
 @app.get("/api/dashboard/metrics")

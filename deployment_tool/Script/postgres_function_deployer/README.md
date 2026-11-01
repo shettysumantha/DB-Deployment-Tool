@@ -116,6 +116,18 @@ Forgot-password reset tokens are stored hashed and expire after 20 minutes. Conf
 
 The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
 
+### Optional local AI assistant
+
+The authenticated application includes an optional Ollama assistant for the personal-laptop demo. It is disabled by default and is not available from the public login form. Install Ollama locally, download a model such as `qwen2.5:3b`, then set these values in the ignored local `.env`:
+
+```env
+AI_ASSISTANT_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:3b
+```
+
+Download the model with `ollama pull qwen2.5:3b`, then sign in at `/login`, open the dashboard, and select **Local AI Assistant**. The server accepts only an IPv4 loopback Ollama URL and does not follow redirects or use a remote AI provider. The assistant receives a fixed general-guidance instruction and the submitted question; it has no database access or deployment tools. Requests require the authenticated session and CSRF token. Prompts are not stored by this application, are limited in size, and common credentials and SQL patterns are rejected. Do not submit passwords, credentials, SQL, schema definitions, or production data. Run the assistant only where the local Ollama service and its model are approved.
+
 ### Database variables
 
 Saved deployment connection metadata is stored in PostgreSQL using `APP_DATABASE_URL`. Database passwords are not stored there and are never returned by the API. `PG_*` values provide defaults for a matching connection; `PG_PASSWORD` is read only by the server and is never rendered in the page. Source and target passwords may be entered at connection time.

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="csrf-token" content="{{ csrf_token }}">
+	<title>Local AI Assistant | DBA Operations Platform</title>
+	<link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+	<link rel="stylesheet" href="/static/shared/css/assistant.css?v=1">
+</head>
+<body class="app-page">
+	{% include 'shared/partials_sidebar.html' %}
+	<header class="topbar dashboard-topbar">
+		<div class="page-shell dashboard-topbar-inner">
+			<div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>Local AI Assistant</h1></div></div>
+			<div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+		</div>
+	</header>
+	<main class="main-content assistant-content">
+		<header class="app-header">
+			<p class="eyebrow accent">AUTHENTICATED LOCAL DEMO</p>
+			<h1>Local AI Assistant</h1>
+			<p>Ask general questions about using the deployment platform. The assistant cannot inspect databases or perform deployments.</p>
+		</header>
+		<section class="assistant-panel" aria-labelledby="assistantTitle">
+			<div class="assistant-panel-heading">
+				<div><p class="eyebrow accent">OLLAMA · {{ assistant_model }}</p><h2 id="assistantTitle">Ask a question</h2></div>
+				<span class="assistant-status">{% if assistant_enabled %}Enabled{% else %}Disabled{% endif %}</span>
+			</div>
+			{% if assistant_enabled %}
+				<p class="assistant-privacy">Prompts go only to the configured loopback Ollama service and are not stored by this application. Do not submit passwords, credentials, SQL statements, schema definitions, or production data.</p>
+				<div id="assistantMessages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+				<form id="assistantForm" class="assistant-form">
+					<label for="assistantPrompt">Your question</label>
+					<textarea id="assistantPrompt" name="message" rows="4" maxlength="2000" required placeholder="For example: How do I prepare a safe, isolated demo?"></textarea>
+					<div class="assistant-form-actions"><small>Maximum 2,000 characters. Questions containing credentials or SQL are rejected.</small><button class="btn btn-primary" type="submit">Ask assistant</button></div>
+					<p id="assistantError" class="assistant-error" role="alert" hidden></p>
+				</form>
+			{% else %}
+				<p class="assistant-disabled" role="status">The assistant is disabled. To enable the personal-laptop demo, set <code>AI_ASSISTANT_ENABLED=true</code> and configure Ollama to listen on <code>127.0.0.1</code>. See the local setup guide.</p>
+			{% endif %}
+		</section>
+	</main>
+	{% if assistant_enabled %}<script src="/static/shared/js/assistant.js?v=1" defer></script>{% endif %}
+</body>
+</html>

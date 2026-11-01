@@ -31,6 +31,7 @@
 			<p id="performanceAdvice" class="dashboard-metrics-note" aria-live="polite"></p>
 		</section>
 		<section class="dashboard-grid">
+			<a class="dashboard-module" href="{{ url_for('assistant_page') }}"><span class="sidebar-icon">✦</span><h2>Local AI Assistant</h2><p>{% if assistant_enabled %}Open the authenticated Ollama demo. Questions are sent only to the local service.{% else %}Optional Ollama demo; configure and enable it for this laptop to use the assistant.{% endif %}</p><span class="module-open">Open assistant <span aria-hidden="true">→</span></span></a>
 			{% for menu in sidebar_menus %}
 				{% for item in menu.children if menu.children %}
 					{% if not item.children and item.menu_type != 'EXTERNAL' %}
