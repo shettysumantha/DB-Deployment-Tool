@@ -4,21 +4,23 @@ import re
 import secrets
 import threading
 import time
+from collections import deque
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urljoin
 
-from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
+from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
 from PIL import Image, ImageOps, UnidentifiedImageError
 import psycopg2
 from psycopg2.errors import CheckViolation, UniqueViolation
 
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
+from core.ai_assistant.ollama_service import AssistantError, UnsafePromptError, assistant_enabled, configured_model, generate_answer
 from core.database.db_service import clean_config, safe_error, test_connection
 from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
 from core.security.security_service import UserNotFoundError, admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, get_profile, get_user_management_detail, get_user_management_edit_data, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_user_management_data, list_user_management_page, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_profile, update_user, user_has_role, user_menus, user_roles, user_session_state
-from modules.database_management.credential_service import connection_config, get_database, list_databases, save_database, update_database
+from modules.database_management.credential_service import connection_config, delete_database, get_database, get_database_password, list_databases, save_database, update_database
 from modules.db_compare.services.backup_service import create_backup, safe_backup_path
 from modules.db_compare.services.comparison_service import compare_functions
 from modules.db_compare.services.deployment_service import deploy_records
@@ -45,15 +47,21 @@ app.extensions["credential_vault"] = vault
 _bootstrap_failures = {}
 _bootstrap_failures_lock = threading.Lock()
 _security_init_failure_logged = False
+_security_database_available = False
+_request_metrics = deque(maxlen=2000)
+_request_metrics_lock = threading.Lock()
+_application_started_at = time.monotonic()
 
 
 def ensure_security_initialized():
-    global _security_init_failure_logged
+    global _security_database_available, _security_init_failure_logged
     try:
         initialize_security()
+        _security_database_available = True
         _security_init_failure_logged = False
         return True
     except Exception:
+        _security_database_available = False
         if not _security_init_failure_logged:
             app.logger.exception("Required security database objects are unavailable; retrying validation on the next request")
             _security_init_failure_logged = True
@@ -107,6 +115,28 @@ def not_found(_error):
 #         return redirect(url_for("login", next=request.full_path))
 #     session.permanent = True
 #     return None
+
+@app.before_request
+def start_request_metrics():
+    if not request.path.startswith("/static/") and request.path != "/health":
+        g.request_started_at = time.perf_counter()
+
+
+@app.after_request
+def record_request_metrics(response):
+    started_at = getattr(g, "request_started_at", None)
+    if started_at is not None:
+        sample = {
+            "timestamp": time.time(),
+            "endpoint": request.url_rule.rule if request.url_rule else "unmatched",
+            "method": request.method,
+            "status": response.status_code,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+        }
+        with _request_metrics_lock:
+            _request_metrics.append(sample)
+    return response
+
 
 @app.before_request
 def enforce_login():
@@ -531,7 +561,92 @@ def logout_route():
 @app.get("/")
 @app.get("/dashboard")
 def dashboard():
-    return render_template("shared/dashboard.html")
+    return render_template(
+        "shared/dashboard.html",
+        assistant_enabled=assistant_enabled(),
+    )
+
+
+@app.get("/assistant")
+def assistant_page():
+    return render_template(
+        "ai_assistant/index.html",
+        assistant_enabled=assistant_enabled(),
+        assistant_model=configured_model(),
+    )
+
+
+@app.post("/api/assistant/chat")
+def assistant_chat_api():
+    if not assistant_enabled():
+        return jsonify({"error": "The local AI assistant is disabled."}), 503
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    prompt = payload.get("message")
+    if not isinstance(prompt, str):
+        return jsonify({"error": "Enter a question for the assistant."}), 400
+
+    try:
+        answer = generate_answer(prompt)
+    except UnsafePromptError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except AssistantError as exc:
+        return jsonify({"error": str(exc)}), 503
+
+    return jsonify({"answer": answer})
+
+
+@app.get("/api/dashboard/metrics")
+def dashboard_metrics_api():
+    cutoff = time.time() - 300
+    with _request_metrics_lock:
+        samples = [sample for sample in _request_metrics if sample["timestamp"] >= cutoff]
+
+    durations = sorted(sample["duration_ms"] for sample in samples)
+    p95_index = max(0, int(len(durations) * 0.95 + 0.999) - 1) if durations else 0
+    endpoint_samples = {}
+    for sample in samples:
+        endpoint_samples.setdefault(sample["endpoint"], []).append(sample["duration_ms"])
+    slowest_endpoints = []
+    for endpoint, endpoint_durations in endpoint_samples.items():
+        ordered = sorted(endpoint_durations)
+        endpoint_p95_index = max(0, int(len(ordered) * 0.95 + 0.999) - 1)
+        slowest_endpoints.append({
+            "endpoint": endpoint,
+            "requests": len(ordered),
+            "average_ms": round(sum(ordered) / len(ordered), 2),
+            "p95_ms": ordered[endpoint_p95_index],
+        })
+    slowest_endpoints.sort(key=lambda item: item["average_ms"], reverse=True)
+
+    errors = sum(sample["status"] >= 500 for sample in samples)
+    recommendations = []
+    if errors:
+        recommendations.append("Review recent server errors in application logs.")
+    if durations and durations[p95_index] >= 750:
+        recommendations.append("Inspect the slowest endpoints for database waits or expensive work.")
+    if not recommendations:
+        recommendations.append("No latency or server-error threshold was exceeded in this sample.")
+    return jsonify({
+        "health": {
+            "web": "UP",
+            "application_database": "UP" if _security_database_available else "DEGRADED",
+        },
+        "performance": {
+            "window_seconds": 300,
+            "sample_count": len(samples),
+            "requests": len(samples),
+            "errors": errors,
+            "average_ms": round(sum(durations) / len(durations), 2) if durations else 0,
+            "p95_ms": durations[p95_index] if durations else 0,
+            "max_ms": durations[-1] if durations else 0,
+            "slowest_endpoints": slowest_endpoints[:5],
+            "recommendations": recommendations,
+        },
+        "uptime_seconds": int(time.monotonic() - _application_started_at),
+    })
 
 
 def require_permission(menu_code, permission="can_view"):
@@ -578,7 +693,12 @@ def menus_api():
 @app.get("/admin/menus")
 def admin_menus():
     require_permission("MENU_MANAGEMENT")
-    return render_template("menu_management/admin_menus.html", menus=list_menus())
+    menus = list_menus()
+    for menu in menus:
+        menu["menu_id"] = str(menu["menu_id"])
+        if menu["parent_menu_id"] is not None:
+            menu["parent_menu_id"] = str(menu["parent_menu_id"])
+    return render_template("menu_management/admin_menus.html", menus=menus)
 
 
 @app.get("/api/admin/menus")
@@ -855,6 +975,9 @@ def admin_database_create():
         test_connection(config)
         save_database(payload.get("database_alias"), config, payload.get("environment"))
         flash("Database connection saved.", "success")
+    except RuntimeError as exc:
+        app.logger.error("Database credential encryption configuration failed: %s", exc)
+        flash(str(exc), "error")
     except Exception:
         app.logger.exception("Database configuration creation failed")
         flash("Unable to save the database. Verify its connection details.", "error")
@@ -867,13 +990,30 @@ def admin_database_update(database_id):
     try:
         payload = request.form.to_dict()
         payload.pop("database_id", None)
-        config = _payload_config(payload)
+        config = _payload_config(payload, saved_database_id=database_id)
         test_connection(config)
         update_database(database_id, payload.get("database_alias"), config, payload.get("environment"))
         flash("Database connection updated.", "success")
+    except RuntimeError as exc:
+        app.logger.error("Database credential encryption configuration failed: %s", exc)
+        flash(str(exc), "error")
     except Exception:
         app.logger.exception("Database configuration update failed")
         flash("Unable to update the database. Verify its connection details.", "error")
+    return redirect(url_for("admin_databases"))
+
+
+@app.post("/admin/databases/<int:database_id>/delete")
+def admin_database_delete(database_id):
+    require_permission("DATABASE_MANAGEMENT", "can_delete")
+    try:
+        delete_database(database_id)
+        flash("Saved connection removed. The database itself was not deleted.", "success")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    except Exception:
+        app.logger.exception("Database connection removal failed")
+        flash("Unable to remove the saved database connection.", "error")
     return redirect(url_for("admin_databases"))
 
 
@@ -1123,19 +1263,31 @@ def index():
 @app.get("/comparison")
 def comparison_page():
     require_permission("COMPARISON_RESULTS")
-    return render_template("db_compare/index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
+    return render_template(
+        "db_compare/index.html",
+        database_defaults=PG_DEFAULTS,
+        can_deploy=False,
+    )
 
 
 @app.get("/history")
 def history_page():
     require_permission("DEPLOYMENT_HISTORY")
-    return render_template("db_compare/index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
+    return render_template(
+        "db_compare/index.html",
+        database_defaults=PG_DEFAULTS,
+        can_deploy=False,
+    )
 
 
 @app.get("/backups")
 def backups_page():
     require_permission("BACKUP_REPOSITORY")
-    return render_template("db_compare/index.html", database_defaults=PG_DEFAULTS, can_deploy=False)
+    return render_template(
+        "db_compare/index.html",
+        database_defaults=PG_DEFAULTS,
+        can_deploy=False,
+    )
 
 
 @app.get("/health")
@@ -1171,19 +1323,16 @@ def test_live_connection():
     return _connect("live")
 
 
-def _payload_config(payload):
+def _payload_config(payload, saved_database_id=None):
     if payload.get("database_id"):
         record = get_database(payload["database_id"])
-        config = {
-            "host": record["host"],
-            "port": record["port"],
-            "database": record["databaseName"],
-            "username": record["username"],
-            "sslmode": record.get("sslmode") or "require",
-            "password": payload.get("password", ""),
-        }
+        config = connection_config(record, payload.get("password"))
     else:
         config = dict(payload)
+    if not config.get("password"):
+        stored_database_id = saved_database_id if not payload.get("database_id") else None
+        if stored_database_id:
+            config["password"] = get_database_password(stored_database_id) or ""
     matches_environment = all(
         str(config.get(field, "")).strip() == str(PG_DEFAULTS[field])
         for field in ("host", "port", "database", "username")
@@ -1196,9 +1345,7 @@ def _payload_config(payload):
 def _connect(role):
     require_any_permission("DEPLOYMENT_MANAGER", "COMPARISON_RESULTS")
     payload = request.get_json(silent=True) or {}
-    if not payload.get("database_id") and not module_permission(
-        session["user_id"], "DB_COMPARE", "can_execute"
-    ):
+    if not module_permission(session["user_id"], "DB_COMPARE", "can_execute"):
         abort(403)
     try:
         config = _payload_config(payload)
@@ -1235,9 +1382,10 @@ def test_saved_database():
     payload = request.get_json(silent=True) or {}
     if payload.get("databaseId") and not payload.get("database_id"):
         payload["database_id"] = payload["databaseId"]
-    if not payload.get("database_id") and not has_permission(
-        session["user_id"], "DEPLOYMENT_MANAGER", "can_execute"
-    ):
+    if payload.get("database_id"):
+        if not module_permission(session["user_id"], "DB_COMPARE", "can_execute"):
+            abort(403)
+    elif not has_permission(session["user_id"], "DEPLOYMENT_MANAGER", "can_execute"):
         abort(403)
     try:
         config = _payload_config(payload)
@@ -1269,7 +1417,7 @@ def edit_database(database_id):
     try:
         config_payload = dict(payload)
         config_payload.pop("database_id", None)
-        config = _payload_config(config_payload)
+        config = _payload_config(config_payload, saved_database_id=database_id)
         test_connection(config)
         record = update_database(database_id, payload.get("database_alias"), config)
         return jsonify({"database": record})

@@ -59,6 +59,32 @@ class FakeSearchCursor(FakeCursor):
 
 
 class SecurityPaginationTests(unittest.TestCase):
+    def test_user_module_access_uses_current_module_name_only(self):
+        user = {
+            "user_id": 7,
+            "username": "test-user",
+            "full_name": "Test User",
+            "email": "test@example.com",
+            "is_active": True,
+            "is_admin": False,
+            "roles": "VIEWER",
+            "module_ids": [12],
+        }
+        module = {
+            "module_id": 12,
+            "module_name": "DB Schema Tracker 1",
+            "parent_menu_name": "Database Operation Module",
+            "submenu_name": "DB Schema Tracker",
+        }
+        with patch.object(security_service, "list_users", return_value=[user]), patch.object(
+            security_service, "list_roles", return_value=[{"role_id": 5, "role_name": "VIEWER"}],
+        ), patch.object(security_service, "list_modules", return_value=[module]):
+            record = security_service._get_user_management_record(7)
+
+        self.assertEqual(record["modules"][0]["name"], "DB Schema Tracker 1")
+        self.assertEqual(record["modules"][0]["parent_name"], "DB Schema Tracker")
+        self.assertEqual(record["modules"][0]["main_menu_name"], "Database Operation Module")
+
     def test_user_module_assignments_use_registry_module_ids(self):
         cursor = FakeAssignmentCursor()
         security_service._save_user_modules(cursor, 7, ["12", "8", "12"])
@@ -263,6 +289,77 @@ class UserManagementRouteTests(unittest.TestCase):
         self.assertEqual(response.get_json()["page_size"], 10)
         self.assertEqual(response.get_json()["total"], 11)
         list_page.assert_called_once_with(11, 0, "partial")
+
+    def test_user_module_access_label_displays_only_module_name(self):
+        module = {
+            "module_id": 12, "module_name": "DB Schema Tracker 1", "module_type": "EXTERNAL",
+            "is_enabled": True, "parent_menu_id": 44, "submenu_name": "DB Schema Tracker",
+            "parent_menu_name": "Database Operation Module",
+        }
+        with patch.object(
+            self.app_module,
+            "list_user_management_page",
+            return_value=([], [], [module], 0),
+        ):
+            response = self.client.get("/admin/users")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b">DB Schema Tracker 1</label>", response.data)
+        self.assertNotIn(b"Database Operation Module / DB Schema Tracker / DB Schema Tracker 1", response.data)
+
+    def test_saved_database_connection_reuses_encrypted_password_server_side(self):
+        record = {
+            "id": 17,
+            "host": "db.example.test", "port": 5432,
+            "databaseName": "test_db", "username": "app_user", "sslmode": "require",
+        }
+        with patch.object(self.app_module, "get_database", return_value=record), patch(
+            "modules.database_management.credential_service.get_database_password",
+            return_value="stored-password",
+        ):
+            config = self.app_module._payload_config({"database_id": 17})
+
+        self.assertEqual(config["password"], "stored-password")
+        self.assertEqual(config["database"], "test_db")
+
+    def test_dashboard_exposes_health_and_recent_performance_metrics(self):
+        response = self.client.get("/api/dashboard/metrics")
+
+        self.assertEqual(response.status_code, 200)
+        metrics = response.get_json()
+        self.assertEqual(metrics["health"]["web"], "UP")
+        self.assertIn("application_database", metrics["health"])
+        self.assertEqual(metrics["performance"]["window_seconds"], 300)
+        self.assertIn("p95_ms", metrics["performance"])
+        self.assertIn("slowest_endpoints", metrics["performance"])
+        self.assertIn("recommendations", metrics["performance"])
+
+    def test_saved_database_delete_requires_delete_permission_and_keeps_database(self):
+        with patch.object(self.app_module, "delete_database") as delete:
+            response = self.client.post(
+                "/admin/databases/17/delete",
+                data={"csrf_token": "test-csrf"},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        delete.assert_called_once_with(17)
+        self.assertEqual(
+            self.app_module.require_permission.call_args.args,
+            ("DATABASE_MANAGEMENT", "can_delete"),
+        )
+
+    def test_saved_database_connection_requires_module_execute_permission(self):
+        with patch.object(self.app_module, "require_any_permission"), patch.object(
+            self.app_module, "module_permission", return_value=False,
+        ) as permission:
+            response = self.client.post(
+                "/api/connect-td",
+                json={"database_id": 17},
+                headers={"X-CSRFToken": "test-csrf"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        permission.assert_called_once_with(7, "DB_COMPARE", "can_execute")
 
     def test_user_detail_api_returns_selected_user(self):
         detail = {"username": "sample", "roles": ["VIEWER"], "modules": []}

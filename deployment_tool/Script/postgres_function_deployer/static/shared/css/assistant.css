@@ -1,0 +1,21 @@
+.assistant-content { max-width: 1050px; }
+.assistant-panel { margin: 8px 32px 32px; padding: 22px; background: #182732; color: #fff; border-top: 3px solid var(--cyan); }
+.assistant-panel-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.assistant-panel-heading h2 { margin: 4px 0 0; font-size: 20px; }
+.assistant-status { padding: 5px 9px; border: 1px solid #6c7f87; color: #b4c6d0; font-size: 11px; text-transform: uppercase; }
+.assistant-privacy, .assistant-form-actions small, .assistant-disabled { color: #b4c6d0; font-size: 12px; line-height: 1.6; }
+.assistant-privacy { margin: 14px 0; }
+.assistant-messages { display: grid; gap: 10px; max-height: 55vh; overflow-y: auto; padding: 4px 0 14px; }
+.assistant-message { max-width: 90%; padding: 12px 14px; background: #22333d; border-left: 2px solid #60727a; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.5; }
+.assistant-message-user { justify-self: end; border-left: 0; border-right: 2px solid var(--cyan); }
+.assistant-message-assistant { justify-self: start; border-left-color: var(--yellow); }
+.assistant-form label { margin-bottom: 5px; color: #b4c6d0; }
+.assistant-form textarea { min-height: 100px; resize: vertical; }
+.assistant-form-actions { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-top: 10px; }
+.assistant-error { color: #ff9a86; font-size: 13px; }
+.assistant-disabled code { color: var(--cyan); }
+@media (max-width: 800px) {
+  .assistant-panel { margin: 8px 18px 24px; padding: 16px; }
+  .assistant-form-actions { align-items: stretch; flex-direction: column; }
+  .assistant-form-actions .btn { align-self: flex-start; }
+}

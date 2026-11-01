@@ -77,6 +77,8 @@ Copy-Item .env.example .env
 
 Edit `.env` locally. It may contain secrets and must never be pushed to GitHub. The template contains names only and no real credentials.
 
+Set `DATABASE_CREDENTIALS_ENCRYPTION_KEY` to a generated Fernet key before saving database connections. The Database Management store encrypts connection passwords at rest and never returns them in list/detail responses. Keep the key in the hosting provider's secret environment, separate from source control. Changing or losing the key makes stored passwords unreadable; retain the current key or re-save all connection passwords after rotating it. `APP_DATABASE_URL` is an internal application connection and is not automatically added to the Database Management list.
+
 ### Application variables
 
 ```env
@@ -113,6 +115,18 @@ Admins can create users and assign multiple modules from the existing `app_secur
 Forgot-password reset tokens are stored hashed and expire after 20 minutes. Configure the existing Brevo SMTP variables to deliver reset links. For local development with `FLASK_DEBUG=true`, a reset link is written only to the server log when delivery cannot be used. Password reset responses do not disclose whether an account exists.
 
 The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
+
+### Optional local AI assistant
+
+The authenticated application includes an optional Ollama assistant for the personal-laptop demo. It is disabled by default and is not available from the public login form. Install Ollama locally, download a model such as `qwen2.5:3b`, then set these values in the ignored local `.env`:
+
+```env
+AI_ASSISTANT_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:3b
+```
+
+Download the model with `ollama pull qwen2.5:3b`, then sign in at `/login`, open the dashboard, and select **Local AI Assistant**. The server accepts only an IPv4 loopback Ollama URL and does not follow redirects or use a remote AI provider. The assistant receives a fixed general-guidance instruction and the submitted question; it has no database access or deployment tools. Requests require the authenticated session and CSRF token. Prompts are not stored by this application, are limited in size, and common credentials and SQL patterns are rejected. Do not submit passwords, credentials, SQL, schema definitions, or production data. Run the assistant only where the local Ollama service and its model are approved.
 
 ### Database variables
 
@@ -215,6 +229,8 @@ python -m gunicorn app:app
 The same command is used on Render. Stop a development server with `Ctrl+C` before starting another process on the same port.
 
 ## 7. Deployment and Backup Behavior
+
+The home dashboard reports the current worker's application/security-database initialization state, recent HTTP request latency (average and p95 over five minutes), error count, slowest route patterns, and process uptime. It provides threshold-based review suggestions; these are HTTP end-to-end timings, not per-query PostgreSQL measurements. Request samples are held in memory, capped at 2,000, and reset on process restart; with multiple Gunicorn workers the dashboard reflects the worker that serves the request, not a cluster-wide or durable performance store.
 
 The existing deployment logic remains responsible for:
 

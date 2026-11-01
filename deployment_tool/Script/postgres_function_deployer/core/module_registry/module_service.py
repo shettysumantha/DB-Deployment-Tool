@@ -254,7 +254,7 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
     health_status = manifest.get("health_status", "UNKNOWN")
     with security_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            _validate_module_submenu(cur, parent_menu_id)
+            _validate_module_parent(cur, parent_menu_id)
             cur.execute(
                 f"""INSERT INTO app_security.modules
                     (module_code, module_name, description, version, module_type,
@@ -372,48 +372,49 @@ def list_parent_menus():
     with security_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                                """SELECT submenu.menu_id, submenu.menu_name, submenu.menu_code,
-                                                    submenu.parent_menu_id, parent.menu_name AS parent_menu_name
-                                     FROM app_security.menus AS submenu
-                                     JOIN app_security.menus AS parent
-                                         ON parent.menu_id = submenu.parent_menu_id
-                                        AND parent.is_active AND parent.menu_type = 'GROUP'
-                                        AND parent.parent_menu_id IS NULL
-                                     WHERE submenu.is_active
-                                         AND submenu.menu_type = 'GROUP'
-                                         AND submenu.parent_menu_id IS NOT NULL
-                                     ORDER BY parent.display_order, parent.menu_name,
-                                                        submenu.display_order, submenu.menu_name"""
+                """SELECT menu.menu_id, menu.menu_name, menu.menu_code,
+                          menu.parent_menu_id, parent.menu_name AS parent_menu_name
+                   FROM app_security.menus AS menu
+                   LEFT JOIN app_security.menus AS parent
+                     ON parent.menu_id = menu.parent_menu_id
+                   WHERE menu.is_active
+                     AND menu.menu_type = 'GROUP'
+                     AND (
+                         menu.parent_menu_id IS NULL
+                         OR (
+                             parent.is_active
+                             AND parent.menu_type = 'GROUP'
+                             AND parent.parent_menu_id IS NULL
+                         )
+                     )
+                   ORDER BY COALESCE(parent.display_order, menu.display_order),
+                            COALESCE(parent.menu_name, menu.menu_name),
+                            menu.display_order, menu.menu_name"""
             )
             return [dict(row) for row in cur.fetchall()]
 
 
-def _validate_module_submenu(cursor, submenu_id):
+def _validate_module_parent(cursor, parent_menu_id):
     cursor.execute(
         """SELECT 1
-           FROM app_security.menus AS submenu
-           JOIN app_security.menus AS parent
-             ON parent.menu_id = submenu.parent_menu_id
-                        AND parent.is_active AND parent.menu_type = 'GROUP'
-                        AND parent.parent_menu_id IS NULL
-           WHERE submenu.menu_id = %s
-             AND submenu.is_active
-             AND submenu.menu_type = 'GROUP'
-             AND submenu.parent_menu_id IS NOT NULL""",
-        (submenu_id,),
+           FROM app_security.menus AS menu
+           LEFT JOIN app_security.menus AS parent
+             ON parent.menu_id = menu.parent_menu_id
+           WHERE menu.menu_id = %s
+             AND menu.is_active
+             AND menu.menu_type = 'GROUP'
+             AND (
+                 menu.parent_menu_id IS NULL
+                 OR (
+                     parent.is_active
+                     AND parent.menu_type = 'GROUP'
+                     AND parent.parent_menu_id IS NULL
+                 )
+             )""",
+        (parent_menu_id,),
     )
     if not cursor.fetchone():
-        raise ValueError("Choose an active submenu under an active main menu.")
-
-
-def _validate_active_group(cursor, group_id):
-    cursor.execute(
-        """SELECT 1 FROM app_security.menus
-           WHERE menu_id = %s AND is_active AND menu_type = 'GROUP'""",
-        (group_id,),
-    )
-    if not cursor.fetchone():
-        raise ValueError("Choose an active submenu under an active main menu.")
+        raise ValueError("Choose an active parent menu.")
 
 
 def get_module(module_id):
@@ -555,13 +556,10 @@ def update_module(module_id, payload, actor_id):
     try:
         parent_menu_id = int(payload.get("parent_menu_id", 0))
     except (TypeError, ValueError) as exc:
-        raise ValueError("Choose an active submenu under an active main menu.") from exc
+        raise ValueError("Choose an active parent menu.") from exc
     with security_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if parent_menu_id == current["parent_menu_id"]:
-                _validate_active_group(cur, parent_menu_id)
-            else:
-                _validate_module_submenu(cur, parent_menu_id)
+            _validate_module_parent(cur, parent_menu_id)
             cur.execute(
                 f"""UPDATE app_security.modules SET
                     module_name = %s, description = %s, version = %s,

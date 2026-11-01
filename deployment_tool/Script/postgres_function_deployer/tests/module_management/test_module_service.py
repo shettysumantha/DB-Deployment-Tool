@@ -65,16 +65,16 @@ class FakePermissionConnection:
 
 
 class FakeRegistryCursor:
-    def __init__(self, existing_module=None, valid_submenu=True):
+    def __init__(self, existing_module=None, valid_parent=True):
         self.executed = []
         self.result = None
         self.existing_module = existing_module
-        self.valid_submenu = valid_submenu
+        self.valid_parent = valid_parent
 
     def execute(self, query, parameters=()):
         self.executed.append((query, parameters))
-        if "FROM app_security.menus AS submenu" in query:
-            self.result = (parameters[0],) if self.valid_submenu else None
+        if "FROM app_security.menus AS menu" in query:
+            self.result = (parameters[0],) if self.valid_parent else None
         elif query.lstrip().startswith("INSERT INTO app_security.modules"):
             self.result = None if self.existing_module else {
                 "module_id": 25, "module_code": "DB_SCHEMA_TRACKER",
@@ -125,10 +125,33 @@ class FakeRegistryConnection:
 
 
 class ModuleServiceTests(unittest.TestCase):
-    def test_module_submenu_validation_rejects_unrelated_menu(self):
-        cursor = FakeRegistryCursor(valid_submenu=False)
-        with self.assertRaisesRegex(ValueError, "active submenu"):
-            module_service._validate_module_submenu(cursor, 99)
+    def test_module_parent_validation_accepts_active_group(self):
+        cursor = FakeRegistryCursor()
+        module_service._validate_module_parent(cursor, 44)
+        query, parameters = cursor.executed[0]
+        self.assertIn("menu.parent_menu_id IS NULL", query)
+        self.assertIn("parent.parent_menu_id IS NULL", query)
+        self.assertEqual(parameters, (44,))
+
+    def test_module_parent_validation_rejects_unrelated_menu(self):
+        cursor = FakeRegistryCursor(valid_parent=False)
+        with self.assertRaisesRegex(ValueError, "active parent menu"):
+            module_service._validate_module_parent(cursor, 99)
+
+    def test_list_parent_menus_includes_main_groups_and_valid_subgroups(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [
+            {"menu_id": 44, "menu_name": "Main", "parent_menu_id": None, "parent_menu_name": None},
+            {"menu_id": 45, "menu_name": "Submenu", "parent_menu_id": 44, "parent_menu_name": "Main"},
+        ]
+        with patch.object(module_service, "security_connection", return_value=connection):
+            menus = module_service.list_parent_menus()
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("menu.parent_menu_id IS NULL", query)
+        self.assertIn("parent.menu_type = 'GROUP'", query)
+        self.assertEqual([menu["menu_id"] for menu in menus], [44, 45])
 
     def test_private_ip_urls_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "private or non-public"):
@@ -315,6 +338,43 @@ class ModuleServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "boolean"):
             module_service.save_module_permissions(25, 3, {"can_view": "false"}, actor_id=8)
 
+    def test_module_rename_updates_existing_record_without_losing_mappings(self):
+        current = {
+            "module_id": 25, "module_code": "INTERNAL_TOOL", "module_name": "Old name",
+            "module_type": "INTERNAL", "version": "1.0.0", "web_url": "/comparison",
+            "api_base_url": "/api", "manifest_url": "/api/module-manifest",
+            "health_url": "/health", "entry_path": "/", "icon": "database",
+            "capabilities": [], "parent_menu_id": 44,
+        }
+        updated = {**current, "module_name": "New name"}
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = updated
+
+        with patch.object(module_service, "get_module", return_value=current), patch.object(
+            module_service, "_validate_module_parent",
+        ), patch.object(module_service, "security_connection", return_value=connection):
+            result = module_service.update_module(
+                25,
+                {
+                    "module_name": "New name", "version": "1.0.0", "web_url": "/comparison",
+                    "api_base_url": "/api", "manifest_url": "/api/module-manifest",
+                    "health_url": "/health", "entry_path": "/", "icon": "database",
+                    "parent_menu_id": 44, "display_order": 0,
+                },
+                actor_id=8,
+            )
+
+        update_call = next(
+            call for call in cursor.execute.call_args_list
+            if "UPDATE app_security.modules SET" in call.args[0]
+        )
+        self.assertIn("module_name = %s", update_call.args[0])
+        self.assertEqual(update_call.args[1][0], "New name")
+        self.assertEqual(result["module_id"], current["module_id"])
+        self.assertEqual(result["module_name"], "New name")
+        self.assertFalse(any("INSERT INTO app_security.modules" in call.args[0] for call in cursor.execute.call_args_list))
+
     def test_external_registration_starts_disabled_and_writes_role_grants(self):
         connection = FakeRegistryConnection()
         manifest = {
@@ -470,6 +530,17 @@ class ModuleServiceTests(unittest.TestCase):
             app_module, "user_roles", return_value=["ADMIN"],
         ), patch.object(app_module, "require_permission"), patch.object(
             app_module, "list_parent_menus", return_value=[{"menu_id": 44, "menu_name": "Database Operation Module"}],
+        ), patch.object(
+            app_module, "registered_modules", return_value=[],
+        ), patch.object(
+            app_module, "list_roles", return_value=[],
+        ), patch.object(
+            app_module, "list_menus", return_value=[
+                {
+                    "menu_id": 1222576651261378561, "parent_menu_id": None, "menu_name": "Database Operation Module",
+                    "menu_code": "DATABASE_OPERATIONS", "menu_type": "GROUP", "is_active": True,
+                },
+            ],
         ), patch.object(app_module, "register_module", side_effect=save_module), patch.object(
             app_module, "set_module_enabled", side_effect=enable_module,
         ), patch.object(app_module, "module_permission", return_value=True), patch.object(
@@ -485,6 +556,17 @@ class ModuleServiceTests(unittest.TestCase):
                         user_id=7, username="admin", session_version="test", _csrf_token="csrf-test",
                     )
                 headers = {"X-CSRFToken": "csrf-test"}
+                menu_page = client.get("/admin/menus")
+                self.assertEqual(menu_page.status_code, 200)
+                self.assertIn(b"Parent Menu", menu_page.data)
+                self.assertIn(b'value="1222576651261378561">Database Operation Module</option>', menu_page.data)
+                self.assertIn(b'"menu_id": "1222576651261378561"', menu_page.data)
+
+                module_page = client.get("/admin/modules")
+                self.assertEqual(module_page.status_code, 200)
+                self.assertIn(b"Parent menu", module_page.data)
+                self.assertIn(b'value="44">Database Operation Module</option>', module_page.data)
+
                 payload = {
                     "web_url": web_url, "api_base_url": "",
                     "manifest_url": "", "health_url": "",
