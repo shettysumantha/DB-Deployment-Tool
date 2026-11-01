@@ -107,21 +107,13 @@
     const renderModuleList = (container, modules) => {
       container.replaceChildren();
       if (!modules.length) { container.textContent = 'No modules assigned'; return; }
-      const groups = new Map();
+      const list = document.createElement('ul');
       modules.forEach(module => {
-        const groupName = [module.main_menu_name, module.parent_name].filter(Boolean).join(' / ') || 'Other';
-        if (!groups.has(groupName)) groups.set(groupName, []);
-        groups.get(groupName).push(module.name);
+        const item = document.createElement('li');
+        item.textContent = module.name;
+        list.append(item);
       });
-      groups.forEach((names, groupName) => {
-        const group = document.createElement('div');
-        const heading = document.createElement('strong');
-        heading.textContent = groupName;
-        const list = document.createElement('ul');
-        names.forEach(name => { const item = document.createElement('li'); item.textContent = name; list.append(item); });
-        group.append(heading, list);
-        container.append(group);
-      });
+      container.append(list);
     };
     const loadUser = async (userId, edit = false) => {
       const path = `/api/admin/users/${encodeURIComponent(userId)}${edit ? '/edit' : ''}`;

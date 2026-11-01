@@ -162,11 +162,19 @@ def validate_read_query(sql):
 
 
 def _connect(config, *, autocommit=False, readonly=False):
-    connection_config = clean_config(config)
-    connection_config.update(
-        connect_timeout=10,
-        application_name="postgres-function-deployer",
-    )
+    cleaned = clean_config(config)
+    connection_config = {
+        "host": cleaned["host"],
+        "port": cleaned["port"],
+        "dbname": cleaned["database"],
+        "user": cleaned["username"],
+        "password": cleaned["password"],
+        "connect_timeout": 10,
+        "application_name": "postgres-function-deployer",
+    }
+    for option in ("sslmode", "sslrootcert"):
+        if option in cleaned:
+            connection_config[option] = cleaned[option]
     connection = psycopg2.connect(**connection_config)
     connection.autocommit = autocommit
     if readonly:
@@ -179,6 +187,19 @@ def _health_query(cursor, sql):
     return cursor.fetchone()
 
 
+def _optional_health_query(cursor, connection, sql):
+    try:
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        return rows, True
+    except psycopg2.Error as exc:
+        if exc.pgcode not in {"0A000", "42501", "42703", "42704", "42883", "42P01"}:
+            raise
+        connection.rollback()
+        cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+        return [], False
+
+
 def inspect_database(config):
     connection = _connect(config, readonly=True)
     try:
@@ -189,45 +210,216 @@ def inspect_database(config):
                 """
                 SELECT current_database() AS database_name,
                        current_user AS connected_as,
-                       version() AS server_version,
-                       pg_database_size(current_database())::bigint AS database_size_bytes,
-                       current_setting('max_connections')::integer AS max_connections,
-                       (SELECT count(*)::integer FROM pg_stat_activity
-                        WHERE datname = current_database()) AS current_connections
+                       version() AS server_version
                 """,
             )
-            stats = _health_query(
+            facts = dict(facts)
+            availability = {}
+            metrics = {
+                "database_size": """
+                    SELECT pg_database_size(current_database())::bigint AS database_size_bytes
+                """,
+                "database_sizes": """
+                    SELECT datname AS database_name,
+                           pg_database_size(datname)::bigint AS size_bytes
+                    FROM pg_database
+                    WHERE NOT datistemplate
+                    ORDER BY pg_database_size(datname) DESC
+                    LIMIT 10
+                """,
+                "connection_counts": """
+                    SELECT count(*)::integer AS current_connections,
+                           count(*) FILTER (WHERE state = 'active')::integer AS active_connections,
+                           count(*) FILTER (WHERE state = 'idle')::integer AS idle_connections
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                """,
+                "connection_limit": """
+                    SELECT current_setting('max_connections')::integer AS max_connections
+                """,
+                "database_statistics": """
+                    SELECT round(
+                        100.0 * blks_hit / NULLIF(blks_hit + blks_read, 0), 2
+                    )::double precision AS cache_hit_percent,
+                    xact_commit::bigint AS transactions_committed,
+                    xact_rollback::bigint AS transactions_rolled_back,
+                    deadlocks::bigint AS deadlocks
+                    FROM pg_stat_database
+                    WHERE datname = current_database()
+                """,
+            }
+            databases = []
+            for name, sql in metrics.items():
+                rows, supported = _optional_health_query(cursor, connection, sql)
+                availability[name] = supported
+                if name == "database_sizes":
+                    databases = [dict(row) for row in rows]
+                elif rows:
+                    facts.update(dict(rows[0]))
+
+            table_rows, table_stats_supported = _optional_health_query(
                 cursor,
+                connection,
                 """
-                SELECT round(
-                    100.0 * blks_hit / NULLIF(blks_hit + blks_read, 0), 2
-                ) AS cache_hit_percent,
-                xact_commit::bigint AS transactions_committed,
-                xact_rollback::bigint AS transactions_rolled_back,
-                deadlocks::bigint AS deadlocks
-                FROM pg_stat_database
-                WHERE datname = current_database()
-                """,
-            ) or {}
-            cursor.execute(
-                """
-                SELECT schemaname, relname AS table_name,
-                       n_live_tup::bigint AS estimated_rows,
-                       n_dead_tup::bigint AS dead_rows,
-                       last_vacuum::text AS last_vacuum,
-                       last_autovacuum::text AS last_autovacuum,
-                       last_analyze::text AS last_analyze,
-                       last_autoanalyze::text AS last_autoanalyze
-                FROM pg_stat_user_tables
-                ORDER BY n_dead_tup DESC, schemaname, relname
+                SELECT stat.schemaname AS schema, stat.relname AS table,
+                       stat.n_live_tup::bigint AS live_rows,
+                       stat.n_dead_tup::bigint AS dead_rows,
+                       pg_total_relation_size(stat.relid)::bigint AS total_size_bytes,
+                       pg_relation_size(stat.relid)::bigint AS table_size_bytes,
+                       pg_indexes_size(stat.relid)::bigint AS index_size_bytes,
+                       stat.last_vacuum::text AS last_vacuum,
+                       stat.last_autovacuum::text AS last_autovacuum,
+                       stat.last_analyze::text AS last_analyze,
+                       stat.last_autoanalyze::text AS last_autoanalyze,
+                       stat.vacuum_count::bigint AS vacuum_count,
+                       stat.autovacuum_count::bigint AS autovacuum_count,
+                       stat.analyze_count::bigint AS analyze_count,
+                       stat.autoanalyze_count::bigint AS autoanalyze_count
+                FROM pg_stat_user_tables AS stat
+                ORDER BY pg_total_relation_size(stat.relid) DESC
                 LIMIT 20
-                """
+                """,
             )
-            tables = [dict(row) for row in cursor.fetchall()]
+            availability["table_statistics"] = table_stats_supported
+            tables = [dict(row) for row in table_rows]
+
+            index_rows, index_stats_supported = _optional_health_query(
+                cursor,
+                connection,
+                """
+                SELECT stat.schemaname AS schema, stat.relname AS table,
+                       stat.indexrelname AS index,
+                       pg_relation_size(stat.indexrelid)::bigint AS size_bytes,
+                       stat.idx_scan::bigint AS scans,
+                       stat.idx_tup_read::bigint AS tuples_read,
+                       stat.idx_tup_fetch::bigint AS tuples_fetched,
+                       (stat.idx_scan = 0 AND NOT index_info.indisunique
+                            AND NOT index_info.indisprimary) AS potential_unused
+                FROM pg_stat_user_indexes AS stat
+                JOIN pg_index AS index_info ON index_info.indexrelid = stat.indexrelid
+                ORDER BY pg_relation_size(stat.indexrelid) DESC
+                LIMIT 20
+                """,
+            )
+            availability["index_statistics"] = index_stats_supported
+            indexes = [dict(row) for row in index_rows]
+
+            query_rows, query_stats_supported = _optional_health_query(
+                cursor,
+                connection,
+                """
+                SELECT usename AS username, application_name,
+                       state, wait_event_type, wait_event,
+                       GREATEST(0, EXTRACT(EPOCH FROM (now() - query_start)))::integer
+                           AS duration_seconds,
+                       left(query, 1000) AS query
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND state = 'active'
+                  AND query_start < now() - interval '1 second'
+                ORDER BY query_start
+                LIMIT 20
+                """,
+            )
+            availability["active_queries"] = query_stats_supported
+            active_queries = [dict(row) for row in query_rows]
+
+            slow_query_rows, slow_query_stats_supported = _optional_health_query(
+                cursor,
+                connection,
+                """
+                SELECT calls::bigint AS calls,
+                       round(mean_exec_time::numeric, 2)::double precision AS mean_execution_ms,
+                       round(total_exec_time::numeric, 2)::double precision AS total_execution_ms,
+                       rows::bigint AS rows_returned,
+                       left(query, 1000) AS query
+                FROM pg_stat_statements
+                ORDER BY mean_exec_time DESC
+                LIMIT 10
+                """,
+            )
+            availability["slow_queries"] = slow_query_stats_supported
+            slow_queries = [dict(row) for row in slow_query_rows]
+
+            lock_rows, lock_stats_supported = _optional_health_query(
+                cursor,
+                connection,
+                """
+                SELECT activity.usename AS username,
+                       activity.application_name, locks.mode, locks.locktype,
+                       locks.relation::regclass::text AS relation,
+                       locks.granted,
+                       activity.wait_event, left(activity.query, 1000) AS query
+                FROM pg_locks AS locks
+                LEFT JOIN pg_stat_activity AS activity ON activity.pid = locks.pid
+                ORDER BY locks.granted, activity.query_start
+                LIMIT 50
+                """,
+            )
+            availability["lock_statistics"] = lock_stats_supported
+            locks = [dict(row) for row in lock_rows]
+
+        current_connections = facts.get("current_connections")
+        max_connections = facts.get("max_connections")
+        utilization = (
+            round(current_connections * 100 / max_connections, 2)
+            if current_connections is not None and max_connections
+            else None
+        )
+        overview = {
+            "database_name": facts.get("database_name"),
+            "connected_as": facts.get("connected_as"),
+            "server": facts.get("server_version"),
+            "database_size_bytes": facts.get("database_size_bytes"),
+            "current_connections": current_connections,
+            "max_connections": max_connections,
+            "connection_utilization_percent": utilization,
+            "active_connections": facts.get("active_connections"),
+            "idle_connections": facts.get("idle_connections"),
+            "cache_hit_percent": facts.get("cache_hit_percent"),
+            "transactions_committed": facts.get("transactions_committed"),
+            "transactions_rolled_back": facts.get("transactions_rolled_back"),
+            "deadlocks": facts.get("deadlocks"),
+        }
+        performance = {
+            "active_queries": active_queries,
+            "long_running_queries": active_queries,
+            "blocking_queries": [
+                row for row in active_queries if row.get("wait_event_type") == "Lock"
+            ],
+            "locks": locks,
+            "slow_queries": slow_queries,
+            "waiting_queries": [
+                row for row in active_queries if row.get("wait_event_type")
+            ],
+            "availability": {
+                "active_queries": availability["active_queries"],
+                "slow_queries": availability["slow_queries"],
+                "locks": availability["lock_statistics"],
+            },
+        }
+        maintenance = {
+            "dead_rows": sum(row.get("dead_rows") or 0 for row in tables),
+            "live_rows": sum(row.get("live_rows") or 0 for row in tables),
+            "vacuum_count": sum(row.get("vacuum_count") or 0 for row in tables),
+            "autovacuum_count": sum(row.get("autovacuum_count") or 0 for row in tables),
+            "analyze_count": sum(row.get("analyze_count") or 0 for row in tables),
+            "autoanalyze_count": sum(row.get("autoanalyze_count") or 0 for row in tables),
+            "availability": availability["table_statistics"],
+        }
         return {
-            "database": dict(facts),
-            "statistics": dict(stats),
-            "tables": tables,
+            "overview": overview,
+            "storage": {
+                "tables": tables,
+                "indexes": indexes,
+                "databases": databases,
+                "unused_indexes": [row for row in indexes if row["potential_unused"]],
+                "total_table_size_bytes": sum(row.get("table_size_bytes") or 0 for row in tables),
+                "total_index_size_bytes": sum(row.get("index_size_bytes") or 0 for row in tables),
+            },
+            "performance": performance,
+            "maintenance": maintenance,
+            "availability": availability,
         }
     finally:
         connection.close()

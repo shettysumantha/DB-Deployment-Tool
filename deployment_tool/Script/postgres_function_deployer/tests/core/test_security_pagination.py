@@ -82,8 +82,7 @@ class SecurityPaginationTests(unittest.TestCase):
             record = security_service._get_user_management_record(7)
 
         self.assertEqual(record["modules"][0]["name"], "DB Schema Tracker 1")
-        self.assertEqual(record["modules"][0]["parent_name"], "DB Schema Tracker")
-        self.assertEqual(record["modules"][0]["main_menu_name"], "Database Operation Module")
+        self.assertEqual(set(record["modules"][0]), {"name"})
 
     def test_user_module_assignments_use_registry_module_ids(self):
         cursor = FakeAssignmentCursor()
@@ -432,7 +431,7 @@ class UserManagementRouteTests(unittest.TestCase):
         self.assertEqual(update.call_args.args[1]["module_ids"], ["9"])
 
     def test_update_api_returns_safe_503_for_database_outage(self):
-        with patch.object(
+        with patch.object(self.app_module.app.logger, "error"), patch.object(
             self.app_module,
             "update_user",
             side_effect=psycopg2.OperationalError("private connection detail"),

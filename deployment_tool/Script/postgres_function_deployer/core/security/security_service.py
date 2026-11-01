@@ -268,6 +268,7 @@ def _fetch_modules(cursor):
                              m.module_name,
                              m.module_type,
                              m.is_enabled,
+                             m.module_classification,
                              m.parent_menu_id,
                              CASE WHEN assigned_parent.parent_menu_id IS NULL
                                         THEN NULL ELSE assigned_parent.menu_name END AS submenu_name,
@@ -281,6 +282,7 @@ def _fetch_modules(cursor):
                             assigned_parent.parent_menu_id, assigned_parent.menu_id
                     )
                 WHERE m.is_active
+                  AND m.module_classification = 'NON_CONFIGURATION'
                 ORDER BY COALESCE(main_menu.display_order, 0), main_menu.menu_name,
                                  COALESCE(assigned_parent.display_order, 0), assigned_parent.menu_name,
                                  m.display_order, m.module_name
@@ -292,6 +294,7 @@ def _fetch_modules(cursor):
                 "module_name",
                 "module_type",
                 "is_enabled",
+                "module_classification",
                 "parent_menu_id",
                 "submenu_name",
                 "parent_menu_name",
@@ -890,6 +893,7 @@ def user_menus(user_id):
                         menu_name,
                         menu_code,
                         menu_type,
+                        menu_classification,
                         route_path,
                         external_url,
                         icon,
@@ -902,6 +906,7 @@ def user_menus(user_id):
                             m.menu_name,
                             m.menu_code,
                             m.menu_type,
+                            m.menu_classification,
                             m.route_path,
                             m.external_url,
                             m.icon,
@@ -918,12 +923,14 @@ def user_menus(user_id):
                          AND r.is_active
                         WHERE ur.user_id = %s
                           AND m.is_active
+                          AND (m.menu_classification = 'NON_CONFIGURATION'
+                               OR %s)
                     ) AS visible_menus
                     ORDER BY COALESCE(parent_menu_id, 0),
                              display_order,
                              menu_name
                     """,
-                    (user_id,),
+                    (user_id, is_admin),
                 )
 
             else:
@@ -935,6 +942,7 @@ def user_menus(user_id):
                         menu_name,
                         menu_code,
                         menu_type,
+                        menu_classification,
                         route_path,
                         external_url,
                         icon,
@@ -947,6 +955,7 @@ def user_menus(user_id):
                             m.menu_name,
                             m.menu_code,
                             m.menu_type,
+                            m.menu_classification,
                             m.route_path,
                             m.external_url,
                             m.icon,
@@ -954,6 +963,7 @@ def user_menus(user_id):
                             m.open_in_new_tab
                         FROM app_security.menus m
                         WHERE m.is_active
+                          AND m.menu_classification = 'NON_CONFIGURATION'
                           AND (
                               EXISTS (
                                   SELECT 1
@@ -985,6 +995,7 @@ def user_menus(user_id):
                 "menu_name",
                 "menu_code",
                 "menu_type",
+                "menu_classification",
                 "route_path",
                 "external_url",
                 "icon",
@@ -1000,7 +1011,7 @@ def user_menus(user_id):
             if is_admin:
                 cur.execute(
                     """SELECT menu_id, parent_menu_id, menu_name, menu_code,
-                              menu_type, route_path, external_url, icon,
+                              menu_type, menu_classification, route_path, external_url, icon,
                               display_order, open_in_new_tab
                        FROM app_security.menus
                        WHERE is_active AND menu_type = 'GROUP'"""
@@ -1013,13 +1024,31 @@ def user_menus(user_id):
             from core.module_registry.module_service import list_available_modules
 
             available_modules = list_available_modules(user_id, cursor=cur)
+            if available_modules:
+                cur.execute(
+                    """SELECT module.module_id, module.navigation_menu_id,
+                              navigation.is_active AS navigation_menu_active
+                       FROM app_security.modules AS module
+                       LEFT JOIN app_security.menus AS navigation
+                         ON navigation.menu_id = module.navigation_menu_id
+                       WHERE module.module_id = ANY(%s)""",
+                    ([module["module_id"] for module in available_modules],),
+                )
+                navigation = {
+                    row[0]: {"menu_id": row[1], "active": bool(row[2])}
+                    for row in cur.fetchall()
+                }
+                for module in available_modules:
+                    module["navigation_menu_id"] = navigation[module["module_id"]]["menu_id"]
+                    module["navigation_menu_active"] = navigation[module["module_id"]]["active"]
             module_parent_ids = sorted(
                 {module["parent_menu_id"] for module in available_modules}
+                - {None}
             )
             if module_parent_ids:
                 cur.execute(
                     """SELECT menu_id, parent_menu_id, menu_name, menu_code,
-                              menu_type, route_path, external_url, icon,
+                              menu_type, menu_classification, route_path, external_url, icon,
                               display_order, open_in_new_tab
                        FROM app_security.menus
                        WHERE menu_id = ANY(%s)
@@ -1055,10 +1084,11 @@ def user_menus(user_id):
             roots.append(menu)
 
     for module in available_modules:
+        if module.get("navigation_menu_id") is not None and module.get("navigation_menu_active"):
+            continue
         parent_id = module["parent_menu_id"]
-        parent = by_id.get(parent_id)
-
-        if parent is None:
+        parent = by_id.get(parent_id) if parent_id is not None else None
+        if parent_id is not None and parent is None:
             parent = {
                 "menu_id": parent_id,
                 "parent_menu_id": None,
@@ -1076,30 +1106,28 @@ def user_menus(user_id):
             roots.append(parent)
             by_id[parent_id] = parent
 
-        parent["children"].append(
-            {
-                "menu_id": -module["module_id"],
-                "parent_menu_id": parent_id,
-                "menu_name": module["module_name"],
-                "menu_code": module["module_code"],
-                "menu_type": module["module_type"],
-                "route_path": f"/modules/{module['module_code']}/launch",
-                "external_url": f"/modules/{module['module_code']}/launch"
-                if module["module_type"] == "EXTERNAL"
-                else None,
-                "icon": module["icon"],
-                "display_order": module["display_order"],
-                "open_in_new_tab": module["module_type"] == "EXTERNAL",
-                "children": [],
-            }
-        )
-
-        parent["children"].sort(
-            key=lambda item: (
-                item["display_order"],
-                item["menu_name"],
+        module_link = {
+            "menu_id": -module["module_id"],
+            "parent_menu_id": parent_id,
+            "menu_name": module["module_name"],
+            "menu_code": module["module_code"],
+            "menu_type": module["module_type"],
+            "route_path": f"/modules/{module['module_code']}/launch",
+            "external_url": f"/modules/{module['module_code']}/launch"
+            if module["module_type"] == "EXTERNAL"
+            else None,
+            "icon": module["icon"],
+            "display_order": module["display_order"],
+            "open_in_new_tab": module["module_type"] == "EXTERNAL",
+            "children": [],
+        }
+        if parent is None:
+            roots.append(module_link)
+        else:
+            parent["children"].append(module_link)
+            parent["children"].sort(
+                key=lambda item: (item["display_order"], item["menu_name"])
             )
-        )
 
     roots.sort(
         key=lambda item: (
@@ -1278,6 +1306,9 @@ def save_menu(data, menu_id=None):
     menu_type = str(
         data.get("menu_type", "INTERNAL")
     ).upper()
+    menu_classification = str(
+        data.get("menu_classification", "NON_CONFIGURATION")
+    ).upper()
 
     if menu_type not in {
         "INTERNAL",
@@ -1287,6 +1318,8 @@ def save_menu(data, menu_id=None):
         raise ValueError(
             "Menu type must be INTERNAL, EXTERNAL, or GROUP."
         )
+    if menu_classification not in {"CONFIGURATION", "NON_CONFIGURATION"}:
+        raise ValueError("Menu classification must be CONFIGURATION or NON_CONFIGURATION.")
 
     if menu_type == "INTERNAL" and not data.get("route_path"):
         raise ValueError(
@@ -1317,30 +1350,33 @@ def save_menu(data, menu_id=None):
     if parent_menu_id is not None and parent_menu_id == menu_id:
         raise ValueError("A menu cannot be its own parent.")
 
-    values = (
-        parent_menu_id,
-        data["menu_name"].strip(),
-        data["menu_code"].strip().upper(),
-        menu_type,
-        data.get("route_path") or None,
-        external_url,
-        data.get("icon") or "menu",
-        int(data.get("display_order", 0)),
-        bool(data.get("is_active", True)),
-        bool(data.get("open_in_new_tab", False)),
-    )
-
     with security_connection() as conn:
         with conn.cursor() as cur:
             if parent_menu_id is not None:
-                parent_query = """SELECT 1 FROM app_security.menus
+                parent_query = """SELECT menu_classification FROM app_security.menus
                                   WHERE menu_id = %s AND is_active
                                     AND menu_type = 'GROUP'"""
                 if menu_type == "GROUP":
                     parent_query += " AND parent_menu_id IS NULL"
                 cur.execute(parent_query, (parent_menu_id,))
-                if not cur.fetchone():
+                parent_row = cur.fetchone()
+                if not parent_row:
                     raise ValueError("Choose an active main menu or submenu as the parent.")
+                menu_classification = parent_row[0]
+
+            values = (
+                parent_menu_id,
+                data["menu_name"].strip(),
+                data["menu_code"].strip().upper(),
+                menu_type,
+                menu_classification,
+                data.get("route_path") or None,
+                external_url,
+                data.get("icon") or "menu",
+                int(data.get("display_order", 0)),
+                bool(data.get("is_active", True)),
+                bool(data.get("open_in_new_tab", False)),
+            )
 
             if menu_id:
                 cur.execute(
@@ -1350,6 +1386,7 @@ def save_menu(data, menu_id=None):
                         menu_name = %s,
                         menu_code = %s,
                         menu_type = %s,
+                        menu_classification = %s,
                         route_path = %s,
                         external_url = %s,
                         icon = %s,
@@ -1374,6 +1411,7 @@ def save_menu(data, menu_id=None):
                             menu_name,
                             menu_code,
                             menu_type,
+                            menu_classification,
                             route_path,
                             external_url,
                             icon,
@@ -1382,13 +1420,58 @@ def save_menu(data, menu_id=None):
                             open_in_new_tab
                         )
                     VALUES
-                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING menu_id
                     """,
                     values,
                 )
 
             result = cur.fetchone()[0]
+            cur.execute(
+                """WITH RECURSIVE descendants(menu_id) AS (
+                       SELECT menu_id FROM app_security.menus WHERE menu_id = %s
+                       UNION ALL
+                       SELECT child.menu_id
+                       FROM app_security.menus AS child
+                       JOIN descendants AS parent ON child.parent_menu_id = parent.menu_id
+                   )
+                   UPDATE app_security.menus AS descendant
+                   SET menu_classification = %s, updated_at = CURRENT_TIMESTAMP
+                   FROM descendants
+                   WHERE descendant.menu_id = descendants.menu_id""",
+                (result, menu_classification),
+            )
+            cur.execute(
+                """WITH RECURSIVE descendants(menu_id) AS (
+                       SELECT menu_id FROM app_security.menus WHERE menu_id = %s
+                       UNION ALL
+                       SELECT child.menu_id
+                       FROM app_security.menus AS child
+                       JOIN descendants AS parent ON child.parent_menu_id = parent.menu_id
+                   )
+                   UPDATE app_security.modules AS module
+                   SET module_classification = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE module.navigation_menu_id IN (SELECT menu_id FROM descendants)
+                      OR module.parent_menu_id IN (SELECT menu_id FROM descendants)""",
+                (result, menu_classification),
+            )
+            if menu_classification == "CONFIGURATION":
+                cur.execute(
+                    """WITH RECURSIVE descendants(menu_id) AS (
+                           SELECT menu_id FROM app_security.menus WHERE menu_id = %s
+                           UNION ALL
+                           SELECT child.menu_id
+                           FROM app_security.menus AS child
+                           JOIN descendants AS parent ON child.parent_menu_id = parent.menu_id
+                       )
+                       DELETE FROM app_security.user_module_access AS assignment
+                       USING app_security.modules AS module
+                       WHERE assignment.module_id = module.module_id
+                         AND module.module_classification = 'CONFIGURATION'
+                         AND (module.navigation_menu_id IN (SELECT menu_id FROM descendants)
+                              OR module.parent_menu_id IN (SELECT menu_id FROM descendants))""",
+                    (result,),
+                )
 
         conn.commit()
 
@@ -1482,7 +1565,8 @@ def _fetch_searched_users(cursor, limit, offset, search):
                              FROM (
                                      SELECT m.module_id, m.module_name
                                      FROM app_security.user_module_access AS a
-                                     JOIN app_security.modules AS m ON m.module_id = a.module_id AND m.is_active
+                                     JOIN app_security.modules AS m ON m.module_id = a.module_id
+                                         AND m.is_active AND m.module_classification = 'NON_CONFIGURATION'
                                      WHERE a.user_id = u.user_id
                                      ORDER BY m.module_name, m.module_id
                              ) AS assigned
@@ -1496,7 +1580,8 @@ def _fetch_searched_users(cursor, limit, offset, search):
                                      JOIN app_security.roles AS r ON r.role_id = ur.role_id AND r.is_active
                                      JOIN app_security.role_module_permissions AS p
                                          ON p.role_id = r.role_id AND p.can_view
-                                     JOIN app_security.modules AS m ON m.module_id = p.module_id AND m.is_active
+                                     JOIN app_security.modules AS m ON m.module_id = p.module_id
+                                         AND m.is_active AND m.module_classification = 'NON_CONFIGURATION'
                                      WHERE ur.user_id = u.user_id
                              ) AS inherited
            ) AS inherited_modules ON TRUE
@@ -1599,7 +1684,9 @@ def _save_user_modules(cursor, user_id, module_ids):
             """
                         SELECT module_id
                         FROM app_security.modules
-                        WHERE is_active AND module_id = ANY(%s)
+                        WHERE is_active
+                          AND module_classification = 'NON_CONFIGURATION'
+                          AND module_id = ANY(%s)
             """,
             (normalized,),
         )
@@ -2080,8 +2167,6 @@ def _get_user_management_record(user_id):
         assigned_modules.append(
             {
                 "name": module["module_name"],
-                "parent_name": module.get("submenu_name"),
-                "main_menu_name": module.get("parent_menu_name"),
             }
         )
 

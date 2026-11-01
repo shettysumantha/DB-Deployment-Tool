@@ -18,33 +18,39 @@
   </header>
   <main class="main-content admin-content">
     <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Application Error Logs</h1></div></header>
-    <p class="notice">Recent application error-level log entries. Request bodies, passwords, and stack traces are not stored.</p>
+    <p class="notice">Recent application error-level log entries. Request bodies and stack traces are not stored. Results are limited to 220 records per page.</p>
     {% if log_error %}<p class="notice error" role="alert">{{ log_error }}</p>{% endif %}
     <section class="admin-section">
       <div class="admin-section-heading"><h2>Recent errors</h2><span>Page {{ page }} · {{ page_size }} records per page</span></div>
+      <form method="get" class="admin-form">
+        <label>Search<input name="q" value="{{ search }}" maxlength="100" placeholder="Module, endpoint, user, or error"></label>
+        <button class="btn btn-secondary" type="submit">Search</button>
+      </form>
       <div class="table-wrap admin-table-wrap error-log-table-wrap">
         <table class="admin-databases-table error-log-table">
-          <thead><tr><th>Time</th><th>Level</th><th>Type</th><th>Endpoint</th><th>User</th><th>Request ID</th><th>Error message</th></tr></thead>
+          <thead><tr><th>ID</th><th>Time</th><th>Module</th><th>Endpoint / Operation</th><th>Level / Type</th><th>Status</th><th>User</th><th>Request ID</th><th>Error message</th></tr></thead>
           <tbody>
             {% for item in logs %}
               <tr>
+                <td>{{ item.error_id }}</td>
                 <td>{{ item.logged_at.isoformat() if item.logged_at else '' }}</td>
-                <td>{{ item.log_level }}</td>
-                <td>{{ item.error_type or '' }}</td>
-                <td>{{ item.http_method or '' }} {{ item.endpoint or '' }}{% if item.http_status %} ({{ item.http_status }}){% endif %}</td>
+                <td>{{ item.module or '' }}</td>
+                <td>{{ item.operation or '' }}<br><small>{{ item.endpoint or '' }}</small></td>
+                <td>{{ item.log_level }}<br>{{ item.error_type or '' }}</td>
+                <td>{{ item.http_status or '' }}</td>
                 <td>{{ item.username or '' }}</td>
                 <td>{{ item.request_id or '' }}</td>
                 <td class="error-log-message">{{ item.error_message }}</td>
               </tr>
             {% else %}
-              <tr><td colspan="7" class="empty-state">No application error logs on this page.</td></tr>
+              <tr><td colspan="9" class="empty-state">No application error logs on this page.</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       <nav class="error-log-pagination" aria-label="Error log pages">
-        {% if page > 1 %}<a class="btn btn-secondary" href="{{ url_for('admin_error_logs', page=page - 1) }}">Newer errors</a>{% endif %}
-        {% if logs|length == page_size %}<a class="btn btn-secondary" href="{{ url_for('admin_error_logs', page=page + 1) }}">Older errors</a>{% endif %}
+        {% if page > 1 %}<a class="btn btn-secondary" href="{{ url_for('admin_error_logs', page=page - 1, q=search) }}">Newer errors</a>{% endif %}
+        {% if logs|length == page_size %}<a class="btn btn-secondary" href="{{ url_for('admin_error_logs', page=page + 1, q=search) }}">Older errors</a>{% endif %}
       </nav>
     </section>
   </main>

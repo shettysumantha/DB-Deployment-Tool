@@ -85,6 +85,24 @@ document.querySelectorAll("[data-edit-connection]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-connect-connection], [data-disconnect-connection]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const row = button.closest("[data-connection-id]");
+    const action = button.hasAttribute("data-connect-connection") ? "connect" : "disconnect";
+    button.disabled = true;
+    try {
+      await sendConnectionRequest(
+        `/api/database-connections/${encodeURIComponent(row.dataset.connectionId)}/${action}`,
+        "POST",
+      );
+      window.location.reload();
+    } catch (error) {
+      showConnectionNotice(error.message, true);
+      button.disabled = false;
+    }
+  });
+});
+
 document.querySelectorAll("[data-remove-connection]").forEach((button) => {
   button.addEventListener("click", async () => {
     const row = button.closest("[data-connection-id]");

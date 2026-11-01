@@ -74,7 +74,7 @@ class FakeRegistryCursor:
     def execute(self, query, parameters=()):
         self.executed.append((query, parameters))
         if "FROM app_security.menus AS menu" in query:
-            self.result = (parameters[0],) if self.valid_parent else None
+            self.result = {"menu_classification": "NON_CONFIGURATION"} if self.valid_parent else None
         elif query.lstrip().startswith("INSERT INTO app_security.modules"):
             self.result = None if self.existing_module else {
                 "module_id": 25, "module_code": "DB_SCHEMA_TRACKER",
@@ -125,6 +125,165 @@ class FakeRegistryConnection:
 
 
 class ModuleServiceTests(unittest.TestCase):
+    def test_api_display_names_are_human_readable(self):
+        self.assertEqual(module_service._api_display_name("database-health"), "Database Health API")
+        self.assertEqual(module_service._api_display_name("db-compare"), "DB Compare API")
+        self.assertEqual(module_service._api_display_name("sql-query"), "SQL Query API")
+
+    def test_internal_api_catalog_syncs_only_configured_module_bases(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [{
+            "api_id": 11,
+            "api_base_url": "/api/compare",
+            "endpoint_id": None,
+            "manifest_url": None,
+            "health_url": None,
+            "sql_url": None,
+        }]
+        endpoints = [
+            {"endpoint_id": 12, "endpoint_name": "Compare", "endpoint_path": "/api/compare"},
+            {"endpoint_id": 13, "endpoint_name": "Compare Health", "endpoint_path": "/api/compare/health"},
+            {"endpoint_id": 14, "endpoint_name": "Compare Manifest", "endpoint_path": "/api/compare/manifest"},
+            {"endpoint_id": 15, "endpoint_name": "Compare SQL", "endpoint_path": "/api/compare/sql"},
+            {"endpoint_id": 16, "endpoint_name": "Other API", "endpoint_path": "/api/other"},
+        ]
+        with patch.object(module_service, "security_connection", return_value=connection), patch.object(
+            module_service, "list_assignable_api_catalog", return_value=[],
+        ):
+            module_service.sync_internal_api_catalog(endpoints)
+
+        candidate_query = cursor.execute.call_args_list[0].args[0]
+        self.assertIn("module_api_catalog AS assignment", candidate_query)
+        self.assertIn("module.module_type = 'INTERNAL'", candidate_query)
+        self.assertNotIn("module_api_endpoints AS assignment", candidate_query)
+        self.assertFalse(any(
+            "INSERT INTO app_security.api_catalog" in call.args[0]
+            for call in cursor.execute.call_args_list
+        ))
+        update = cursor.execute.call_args_list[1]
+        self.assertIn("WHERE api_id = %s", update.args[0])
+        self.assertEqual(update.args[1], (
+            12, "/api/compare/manifest", "/api/compare/health", "/api/compare/sql", 11,
+        ))
+
+    def test_module_api_catalog_lists_only_module_links(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [
+            {
+                "module_id": 1,
+                "module_code": "DB_COMPARE",
+                "module_name": "DB Compare Tool",
+                "api_id": 1223769349816516600,
+                "api_name": "DB Compare API",
+                "api_base_url": "/api/compare",
+            },
+        ]
+        with patch.object(module_service, "security_connection", return_value=connection):
+            modules = module_service.list_module_api_catalog()
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("app_security.module_api_catalog AS assignment", query)
+        self.assertIn("WHERE module.is_active", query)
+        self.assertEqual(len(modules), 1)
+        self.assertEqual(modules[0]["api_id"], "1223769349816516600")
+        self.assertEqual(modules[0]["api_base_url"], "/api/compare")
+
+    def test_api_catalog_serializes_bigserial_ids_as_strings(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [
+            {"api_id": 1223769349816516600, "endpoint_id": 1223750188786811000},
+        ]
+        with patch.object(module_service, "security_connection", return_value=connection):
+            apis = module_service.list_api_catalog()
+
+        self.assertEqual(apis[0]["api_id"], "1223769349816516600")
+        self.assertEqual(apis[0]["endpoint_id"], "1223750188786811000")
+
+    def test_configured_api_list_includes_manual_internal_apis(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = []
+        with patch.object(module_service, "security_connection", return_value=connection):
+            self.assertEqual(module_service.list_configured_api_catalog(), [])
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("WHERE api.source_key LIKE 'INTERNAL:MANUAL:%'", query)
+        self.assertIn("OR EXISTS", query)
+        self.assertIn("module.is_active", query)
+        self.assertIn("api.web_url", query)
+        self.assertNotIn("api.api_type = 'EXTERNAL' OR", query)
+        self.assertIn("module.manifest_url", query)
+        self.assertIn("module.health_url", query)
+
+    def test_assignable_api_list_excludes_unassigned_discovered_internal_endpoints(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = []
+        with patch.object(module_service, "security_connection", return_value=connection):
+            self.assertEqual(module_service.list_assignable_api_catalog(), [])
+
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("api.api_type = 'EXTERNAL'", query)
+        self.assertIn("api.source_key LIKE 'INTERNAL:MANUAL:%'", query)
+        self.assertIn("assignment.api_id = api.api_id", query)
+        self.assertIn("module.module_type = 'INTERNAL'", query)
+        self.assertIn("module.api_base_url = api.api_base_url", query)
+        self.assertIn("module.manifest_url", query)
+        self.assertIn("module.health_url", query)
+        self.assertNotIn("module_api_endpoints AS assignment", query)
+
+    def test_external_api_persists_optional_web_url(self):
+        connection = MagicMock()
+        cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = {"api_id": 43}
+        payload = {
+            "api_name": "Monitoring API",
+            "web_url": "https://monitor.example/",
+            "api_base_url": "https://monitor.example/api",
+        }
+        with patch.object(module_service, "security_connection", return_value=connection), patch.object(
+            module_service, "_validate_url", side_effect=lambda value, _label: value,
+        ):
+            api_id = module_service.save_external_api(payload, actor_id=8)
+
+        insert = next(
+            call for call in cursor.execute.call_args_list
+            if "INSERT INTO app_security.api_catalog" in call.args[0]
+        )
+        self.assertEqual(api_id, 43)
+        self.assertIn("web_url", insert.args[0])
+        self.assertIn("https://monitor.example/", insert.args[1])
+
+    def test_optional_module_parent_does_not_require_a_menu(self):
+        cursor = MagicMock()
+        module_service._validate_module_parent(cursor, None)
+        cursor.execute.assert_not_called()
+
+    def test_api_catalog_migration_supports_independent_modules_and_assignments(self):
+        app_root = Path(__file__).resolve().parents[2]
+        migration = (
+            app_root / "database" / "migrations"
+            / "20261101_z_module_api_catalog.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ALTER COLUMN parent_menu_id DROP NOT NULL", migration)
+        self.assertIn("CREATE TABLE IF NOT EXISTS app_security.api_catalog", migration)
+        self.assertIn("CREATE TABLE IF NOT EXISTS app_security.module_api_catalog", migration)
+        self.assertIn("u.module_access_configured AND EXISTS", migration)
+        self.assertIn("app_security.user_module_access", migration)
+
+    def test_module_api_assignment_migration_seeds_known_module_apis(self):
+        app_root = Path(__file__).resolve().parents[2]
+        migration = (
+            app_root / "database" / "migrations"
+            / "20261101_zz_module_api_assignments.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("'INTERNAL:compare'", migration)
+        self.assertIn("'EXTERNAL:MODULE:DB_SCHEMA_TRACKER_1'", migration)
+        self.assertIn("https://db-schema-tracker-1.onrender.com/api", migration)
+
     def test_module_parent_validation_accepts_active_group(self):
         cursor = FakeRegistryCursor()
         module_service._validate_module_parent(cursor, 44)
@@ -333,25 +492,88 @@ class ModuleServiceTests(unittest.TestCase):
         self.assertTrue(connection.closed)
 
     def test_explicit_db_compare_assignment_remains_authoritative(self):
-        row = (False, True, 12, True, False)
+        row = (False, True, 12, "NON_CONFIGURATION", True, False)
         with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
             self.assertFalse(module_service.module_permission(7, "DB_COMPARE", "can_view"))
 
     def test_role_grants_apply_to_modules_without_legacy_menu_mappings(self):
-        row = (False, True, None, True, False)
+        row = (False, True, None, "NON_CONFIGURATION", True, False)
         with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
-            self.assertTrue(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_view"))
+            self.assertFalse(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_view"))
 
     def test_direct_module_assignment_grants_view_only(self):
-        row = (False, True, 12, False, True)
+        row = (False, True, 12, "NON_CONFIGURATION", False, True)
         with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
             self.assertTrue(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_view"))
             self.assertFalse(module_service.module_permission(7, "DB_SCHEMA_TRACKER", "can_edit"))
 
     def test_admin_access_is_module_enabled_and_permission_scoped(self):
-        row = (True, True, None, False, False)
+        row = (True, True, None, "NON_CONFIGURATION", False, False)
         with patch.object(module_service, "security_connection", return_value=FakePermissionConnection(row)):
             self.assertTrue(module_service.module_permission(1, "DB_SCHEMA_TRACKER", "can_execute"))
+
+    def test_internal_api_routes_are_synchronized_into_the_internal_catalog(self):
+        class FakeCursor:
+            def __init__(self):
+                self.executed = []
+
+            def execute(self, query, parameters=()):
+                self.executed.append((query, parameters))
+
+            def fetchall(self):
+                return [{
+                    "endpoint_id": 1,
+                    "endpoint_name": "health api",
+                    "endpoint_path": "/api/health",
+                }]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class FakeConnection:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+                self.committed = False
+
+            def cursor(self, **_kwargs):
+                return self.cursor_instance
+
+            def commit(self):
+                self.committed = True
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        connection = FakeConnection()
+        with patch.object(module_service, "security_connection", return_value=connection):
+            endpoints = module_service.sync_internal_api_endpoints(
+                [
+                    ("/api/health", "health_api"),
+                    ("/api/modules/<int:module_id>", "module_detail"),
+                    ("/admin/modules", "admin_modules"),
+                    ("//invalid", "invalid"),
+                ],
+                actor_id=7,
+            )
+
+        self.assertEqual(endpoints[0]["endpoint_path"], "/api/health")
+        statements = connection.cursor_instance.executed
+        self.assertIn("endpoint_source = 'INTERNAL'", statements[0][0])
+        registered = [
+            (query, parameters)
+            for query, parameters in statements
+            if query.startswith("INSERT INTO app_security.api_endpoints")
+        ]
+        self.assertEqual(len(registered), 1)
+        self.assertEqual(registered[0][1].count(7), 2)
+        self.assertIn("(%s, %s, 'INTERNAL', %s)", registered[0][0])
+        self.assertTrue(connection.committed)
 
     def test_module_permission_updates_require_boolean_values(self):
         with self.assertRaisesRegex(ValueError, "boolean"):
@@ -364,11 +586,15 @@ class ModuleServiceTests(unittest.TestCase):
             "api_base_url": "/api", "manifest_url": "/api/module-manifest",
             "health_url": "/health", "entry_path": "/", "icon": "database",
             "capabilities": [], "parent_menu_id": 44,
+            "module_classification": "NON_CONFIGURATION",
         }
         updated = {**current, "module_name": "New name"}
         connection = MagicMock()
         cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
-        cursor.fetchone.side_effect = [updated, {"relation": None}]
+        cursor.fetchone.side_effect = [
+            {"menu_classification": "NON_CONFIGURATION"}, updated,
+            {"relation": None}, {"relation": None},
+        ]
 
         with patch.object(module_service, "get_module", return_value=current), patch.object(
             module_service, "_validate_module_parent",
@@ -419,7 +645,7 @@ class ModuleServiceTests(unittest.TestCase):
             parameters for query, parameters in executed
             if query.lstrip().startswith("INSERT INTO app_security.modules")
         )
-        self.assertEqual(insert_parameters[10], 4)
+        self.assertEqual(insert_parameters[11], 4)
         self.assertTrue(any("INSERT INTO app_security.role_module_permissions" in query for query in statements))
         audit = next(parameters for query, parameters in connection.cursor_instance.executed if "INSERT INTO app_security.audit_logs" in query)
         self.assertEqual(audit[1], "MODULE_REGISTERED")
@@ -476,7 +702,7 @@ class ModuleServiceTests(unittest.TestCase):
                 module_service.register_module(manifest, actor_id=8, parent_menu_id=4, display_order=10)
 
         self.assertFalse(connection.committed)
-        self.assertEqual(len(connection.cursor_instance.executed), 3)
+        self.assertEqual(len(connection.cursor_instance.executed), 4)
 
     def test_web_only_registration_stores_null_api_urls_and_can_be_enabled(self):
         web_url = "https://db-schema-tracker-1.onrender.com/"
@@ -492,8 +718,8 @@ class ModuleServiceTests(unittest.TestCase):
             for query, parameters in connection.cursor_instance.executed
             if query.lstrip().startswith("INSERT INTO app_security.modules")
         )
-        self.assertEqual(insert_parameters[4:8], (web_url, None, None, None))
-        self.assertEqual(insert_parameters[12:14], ("UNKNOWN", "UNKNOWN"))
+        self.assertEqual(insert_parameters[5:9], (web_url, None, None, None))
+        self.assertEqual(insert_parameters[13:15], ("UNKNOWN", "UNKNOWN"))
         self.assertEqual(insert_query.count("%s"), len(insert_parameters))
         self.assertTrue(enabled)
         self.assertTrue(connection.committed)
@@ -532,7 +758,7 @@ class ModuleServiceTests(unittest.TestCase):
         web_url = "https://db-schema-tracker-1.onrender.com/"
         registered = {}
 
-        def save_module(module, _actor_id, parent_menu_id, display_order):
+        def save_module(module, _actor_id, parent_menu_id, display_order, **_options):
             registration_reused = bool(registered)
             registered.update(module)
             registered.update(
@@ -559,6 +785,20 @@ class ModuleServiceTests(unittest.TestCase):
             app_module, "list_roles", return_value=[],
         ), patch.object(
             app_module, "list_module_api_endpoint_assignments", return_value={},
+        ), patch.multiple(
+            app_module,
+            list_module_api_catalog_assignments=MagicMock(return_value={}),
+            sync_internal_api_endpoints=MagicMock(return_value=[]),
+            sync_internal_api_catalog=MagicMock(return_value=[]),
+            list_configured_api_catalog=MagicMock(return_value=[]),
+            list_navigation_menus=MagicMock(return_value=[
+                {
+                    "menu_id": 44, "parent_menu_id": None,
+                    "menu_name": "Database Operation Module", "menu_type": "GROUP",
+                    "menu_classification": "NON_CONFIGURATION",
+                    "route_path": None,
+                },
+            ]),
         ), patch.object(
             app_module, "list_menus", return_value=[
                 {
@@ -589,8 +829,11 @@ class ModuleServiceTests(unittest.TestCase):
 
                 module_page = client.get("/admin/modules")
                 self.assertEqual(module_page.status_code, 200)
-                self.assertIn(b"Parent menu", module_page.data)
-                self.assertIn(b'value="44">Database Operation Module</option>', module_page.data)
+                self.assertIn(b"Parent menu / submenu assignment", module_page.data)
+                self.assertIn(
+                    b'data-parent-choice data-classification="NON_CONFIGURATION" value="44"',
+                    module_page.data,
+                )
 
                 payload = {
                     "web_url": web_url, "api_base_url": "",

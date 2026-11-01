@@ -56,6 +56,8 @@ class ApplicationErrorLoggingTests(unittest.TestCase):
             log_level="ERROR",
             error_type="RuntimeError",
             error_message="module query failed",
+            module="admin_modules",
+            operation="GET /admin/modules",
             endpoint="/admin/modules",
             http_method="GET",
             http_status=500,
@@ -104,6 +106,21 @@ class ApplicationErrorLoggingTests(unittest.TestCase):
 
         self.assertIn("CREATE TABLE IF NOT EXISTS public.tbl_errorlogs", schema)
         self.assertIn("CREATE INDEX IF NOT EXISTS ix_tbl_errorlogs_logged_at", schema)
+        self.assertIn("module VARCHAR(150)", schema)
+        self.assertIn("operation VARCHAR(500)", schema)
+
+    def test_database_tools_migration_seeds_permission_controlled_modules(self):
+        from pathlib import Path
+
+        app_root = Path(__file__).resolve().parents[2]
+        migration = (
+            app_root / "database" / "migrations"
+            / "20261101_database_tool_modules.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("'DATABASE_HEALTH'", migration)
+        self.assertIn("'SQL_QUERY_TOOL'", migration)
+        self.assertIn("'ERROR_LOG'", migration)
+        self.assertIn("endpoint_source", migration)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Database Health Dashboard | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+  <link rel="stylesheet" href="/static/shared/css/database-tools.css?v=3">
+</head>
+<body class="app-page database-health-page">
+  {% include 'shared/partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>Database Health Dashboard</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content">
+    <div class="database-tools page-shell">
+    <header class="admin-page-heading">
+      <div><p class="eyebrow accent">DATABASE HEALTH</p><h1>Database Health Dashboard</h1></div>
+      <a class="btn btn-secondary" href="{{ url_for('admin_databases') }}">Manage connections</a>
+    </header>
+    <section class="admin-section database-connection-panel" data-database-connection data-connected-id="{{ connected_database_id or '' }}">
+      <h2>Select Database</h2>
+      {% if databases %}
+        <label for="databaseConnectionSelect">Saved connection
+          <select id="databaseConnectionSelect">
+            {% for database in databases %}
+              <option value="{{ database.id }}"{% if database.id == connected_database_id %} selected{% endif %}>{{ database.database_alias or database.host }} → {{ database.databaseName }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="database-form-actions">
+          <button class="btn btn-primary" type="button" data-connect-selected>Connect</button>
+          <button class="btn btn-secondary" type="button" data-disconnect-selected>Disconnect</button>
+        </div>
+      {% else %}
+        <p class="notice">No database connections available.</p>
+        <a class="btn btn-primary" href="{{ url_for('admin_databases') }}">Go to Database Management → Add Connection</a>
+      {% endif %}
+      <p class="notice" data-connection-status role="status" aria-live="polite">{% if connected_database_id %}Connected{% else %}Disconnected{% endif %}</p>
+    </section>
+    <section class="admin-section" aria-labelledby="healthTitle">
+      <div class="admin-section-heading">
+        <h2 id="healthTitle">Database Overview</h2>
+        <button id="refreshHealth" class="btn btn-secondary" type="button" disabled>Refresh health</button>
+      </div>
+      <p id="healthStatus" class="notice" role="status" aria-live="polite">Connect to a saved database to load health information.</p>
+      <div id="healthFacts" class="health-facts"></div>
+      <div id="healthCharts" class="health-charts" aria-label="Database utilization charts"></div>
+      <div id="healthSections"></div>
+      <div class="table-wrap admin-table-wrap">
+        <table class="admin-databases-table">
+          <caption>Largest tables and maintenance statistics</caption>
+          <thead><tr><th>Schema</th><th>Table</th><th>Rows</th><th>Dead rows</th><th>Table size</th><th>Index size</th><th>Last vacuum</th><th>Last analyze</th></tr></thead>
+          <tbody id="healthTables"><tr><td colspan="8" class="empty-state">Health data has not been loaded.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <p><a class="btn btn-secondary" href="{{ url_for('database_tools_page') }}">Open SQL Query Tool</a></p>
+    </div>
+  </main>
+  <script src="/static/shared/js/database-connection.js?v=1" defer></script>
+  <script src="/static/shared/js/database-health.js?v=1" defer></script>
+</body>
+</html>

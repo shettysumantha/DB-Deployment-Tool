@@ -1,7 +1,4 @@
 (() => {
-  const healthStatus = document.getElementById("healthStatus");
-  const healthFacts = document.getElementById("healthFacts");
-  const healthTables = document.getElementById("healthTables");
   const queryStatus = document.getElementById("queryStatus");
   const sqlInput = document.getElementById("databaseSql");
   const resultsTable = document.getElementById("queryResults");
@@ -11,65 +8,6 @@
     const cell = document.createElement(tag);
     cell.textContent = value === null || value === undefined ? "—" : String(value);
     row.appendChild(cell);
-  };
-
-  const showHealth = (data) => {
-    const database = data.database;
-    const stats = data.statistics;
-    const facts = [
-      ["Connection", `${data.connection.host}:${data.connection.port} → ${data.connection.databaseName}`],
-      ["Environment", data.connection.environment],
-      ["Server", database.server_version],
-      ["Database size", `${(database.database_size_bytes / (1024 ** 3)).toFixed(2)} GB`],
-      ["Connections", `${database.current_connections} / ${database.max_connections}`],
-      ["Cache hit ratio", stats.cache_hit_percent === null ? "Not available" : `${stats.cache_hit_percent}%`],
-      ["Committed transactions", stats.transactions_committed],
-      ["Rolled back transactions", stats.transactions_rolled_back],
-      ["Deadlocks", stats.deadlocks],
-    ];
-    healthFacts.replaceChildren();
-    facts.forEach(([label, value]) => {
-      const wrapper = document.createElement("dl");
-      wrapper.className = "health-fact";
-      const term = document.createElement("dt");
-      term.textContent = label;
-      const detail = document.createElement("dd");
-      detail.textContent = value === null || value === undefined ? "—" : String(value);
-      wrapper.append(term, detail);
-      healthFacts.appendChild(wrapper);
-    });
-
-    healthTables.replaceChildren();
-    if (!data.tables.length) {
-      const row = healthTables.insertRow();
-      const cell = row.insertCell();
-      cell.colSpan = 6;
-      cell.className = "empty-state";
-      cell.textContent = "No user tables were reported.";
-      return;
-    }
-    data.tables.forEach((table) => {
-      const row = healthTables.insertRow();
-      addCell(row, table.schemaname);
-      addCell(row, table.table_name);
-      addCell(row, Number(table.estimated_rows).toLocaleString());
-      addCell(row, Number(table.dead_rows).toLocaleString());
-      addCell(row, table.last_vacuum || table.last_autovacuum);
-      addCell(row, table.last_analyze || table.last_autoanalyze);
-    });
-  };
-
-  const loadHealth = async () => {
-    healthStatus.textContent = "Loading health information…";
-    try {
-      const response = await fetch("/api/database-health", { credentials: "same-origin" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Unable to load health information.");
-      showHealth(data);
-      healthStatus.textContent = `Connected to ${data.database.database_name} as ${data.database.connected_as}.`;
-    } catch (error) {
-      healthStatus.textContent = error.message;
-    }
   };
 
   const renderResults = (result) => {
@@ -123,14 +61,11 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Database operation failed.");
       renderResults(result);
-      if (operation === "vacuum_analyze") await loadHealth();
     } catch (error) {
       queryStatus.textContent = error.message;
     }
   };
 
-  document.getElementById("refreshHealth").addEventListener("click", loadHealth);
   document.getElementById("runReadQuery").addEventListener("click", () => submit("query"));
   document.getElementById("runVacuumAnalyze").addEventListener("click", () => submit("vacuum_analyze"));
-  loadHealth();
 })();

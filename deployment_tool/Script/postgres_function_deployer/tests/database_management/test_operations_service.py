@@ -6,6 +6,170 @@ from modules.database_management import operations_service
 
 
 class DatabaseOperationsServiceTests(unittest.TestCase):
+    def test_connection_maps_saved_credentials_to_psycopg_options(self):
+        config = {
+            "host": "db.example.com",
+            "port": 26257,
+            "database": "defaultdb",
+            "username": "monitor",
+            "password": "secret",
+            "sslmode": "require",
+        }
+        connection = SimpleNamespace(set_session=lambda **_kwargs: None)
+
+        with patch.object(
+            operations_service.psycopg2, "connect", return_value=connection
+        ) as connect:
+            operations_service._connect(config, readonly=True)
+
+        connect.assert_called_once_with(
+            host="db.example.com",
+            port=26257,
+            dbname="defaultdb",
+            user="monitor",
+            password="secret",
+            connect_timeout=10,
+            application_name="postgres-function-deployer",
+            sslmode="require",
+        )
+
+    def test_health_inspection_returns_live_overview_storage_and_performance_metrics(self):
+        class FakeCursor:
+            def __init__(self):
+                self.rows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query):
+                if "SELECT current_database()" in query:
+                    self.rows = [{
+                        "database_name": "demo",
+                        "connected_as": "monitor",
+                        "server_version": "PostgreSQL 16",
+                    }]
+                elif "pg_database_size(current_database())" in query:
+                    self.rows = [{"database_size_bytes": 2048}]
+                elif "FROM pg_database" in query:
+                    self.rows = [{"database_name": "demo", "size_bytes": 2048}]
+                elif "current_setting('max_connections')" in query:
+                    self.rows = [{"max_connections": 10}]
+                elif "count(*) FILTER" in query:
+                    self.rows = [{
+                        "current_connections": 3,
+                        "active_connections": 1,
+                        "idle_connections": 2,
+                    }]
+                elif "FROM pg_stat_database" in query:
+                    self.rows = [{
+                        "cache_hit_percent": 99,
+                        "transactions_committed": 20,
+                        "transactions_rolled_back": 1,
+                        "deadlocks": 0,
+                    }]
+                elif "FROM pg_stat_user_tables" in query:
+                    self.rows = [{
+                        "schema": "public",
+                        "table": "events",
+                        "live_rows": 12,
+                        "dead_rows": 2,
+                        "table_size_bytes": 1000,
+                        "index_size_bytes": 500,
+                        "last_vacuum": None,
+                        "last_autovacuum": "2026-11-01",
+                        "last_analyze": "2026-11-01",
+                        "last_autoanalyze": None,
+                        "vacuum_count": 1,
+                        "autovacuum_count": 2,
+                        "analyze_count": 3,
+                        "autoanalyze_count": 4,
+                    }]
+                elif "FROM pg_stat_user_indexes" in query:
+                    self.rows = [{
+                        "schema": "public",
+                        "table": "events",
+                        "index": "events_unused_idx",
+                        "size_bytes": 500,
+                        "scans": 0,
+                        "tuples_read": 0,
+                        "tuples_fetched": 0,
+                        "potential_unused": True,
+                    }]
+                elif "FROM pg_stat_activity" in query:
+                    self.rows = [{
+                        "username": "app",
+                        "application_name": "service",
+                        "state": "active",
+                        "wait_event_type": "Lock",
+                        "wait_event": "transactionid",
+                        "duration_seconds": 25,
+                        "query": "SELECT 1",
+                    }]
+                elif "FROM pg_stat_statements" in query:
+                    self.rows = [{
+                        "calls": 2,
+                        "mean_execution_ms": 50,
+                        "total_execution_ms": 100,
+                        "rows_returned": 4,
+                        "query": "SELECT 1",
+                    }]
+                elif "FROM pg_locks" in query:
+                    self.rows = [{
+                        "username": "app",
+                        "application_name": "service",
+                        "mode": "AccessShareLock",
+                        "locktype": "relation",
+                        "relation": "events",
+                        "granted": False,
+                        "wait_event": "transactionid",
+                        "query": "SELECT 1",
+                    }]
+                elif query.startswith("SAVEPOINT"):
+                    self.rows = []
+                else:
+                    self.rows = []
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeConnection:
+            def cursor(self, **_kwargs):
+                return FakeCursor()
+
+            def set_session(self, **_kwargs):
+                pass
+
+            def close(self):
+                pass
+
+        valid_config = {
+            "host": "db",
+            "port": 5432,
+            "database": "demo",
+            "username": "monitor",
+            "password": "secret",
+        }
+        with patch.object(
+            operations_service, "clean_config", return_value=valid_config
+        ), patch.object(
+            operations_service.psycopg2, "connect", return_value=FakeConnection()
+        ):
+            result = operations_service.inspect_database({"host": "db"})
+
+        self.assertEqual(result["overview"]["database_name"], "demo")
+        self.assertEqual(result["overview"]["connection_utilization_percent"], 30)
+        self.assertEqual(result["storage"]["total_table_size_bytes"], 1000)
+        self.assertEqual(result["storage"]["total_index_size_bytes"], 500)
+        self.assertEqual(result["storage"]["unused_indexes"][0]["index"], "events_unused_idx")
+        self.assertEqual(result["performance"]["blocking_queries"][0]["duration_seconds"], 25)
+        self.assertTrue(result["availability"]["slow_queries"])
+
     def test_select_and_read_only_cte_queries_are_allowed(self):
         self.assertEqual(
             operations_service.validate_read_query(
@@ -87,7 +251,16 @@ class DatabaseOperationsServiceTests(unittest.TestCase):
                 self.closed = True
 
         database = FakeConnection()
-        with patch.object(operations_service, "clean_config", return_value={"host": "db"}), patch.object(
+        valid_config = {
+            "host": "db",
+            "port": 5432,
+            "database": "demo",
+            "username": "monitor",
+            "password": "secret",
+        }
+        with patch.object(
+            operations_service, "clean_config", return_value=valid_config
+        ), patch.object(
             operations_service.psycopg2, "connect", return_value=database
         ) as connect:
             result = operations_service.execute_read_query(
@@ -96,6 +269,10 @@ class DatabaseOperationsServiceTests(unittest.TestCase):
 
         connect.assert_called_once_with(
             host="db",
+            port=5432,
+            dbname="demo",
+            user="monitor",
+            password="secret",
             connect_timeout=10,
             application_name="postgres-function-deployer",
         )

@@ -123,6 +123,28 @@ body[data-can-deploy="false"] #deployBtnBottom { display: none; }
 .admin-form button { height: 40px; }
 .admin-form fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid #c9c8c0; }
 .admin-form legend, .user-update-fields legend { float: none; width: auto; padding: 0 5px; color: #58636a; font-size: 11px; }
+.module-menu-assignment { grid-column: 1 / -1; align-self: stretch; }
+.module-menu-assignment input { width: auto; margin: 0; accent-color: #168d80; }
+.module-menu-assignment > label, .menu-submenu-choices label { display: flex; align-items: center; gap: 8px; color: #333d43; font-size: 12px; }
+.menu-submenu-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px 0 12px 24px; }
+.menu-submenu-choices[hidden] { display: none; }
+.menu-submenu-choices details { grid-column: 1 / -1; }
+.menu-submenu-choices summary { cursor: pointer; color: #263a42; }
+.menu-submenu-choices summary label { display: inline-flex; align-items: center; gap: 8px; }
+.module-menu-assignment input:focus-visible { outline: 2px solid #168d80; outline-offset: 2px; }
+.module-management-page .module-registration-section { padding: 0 0 22px; background: transparent; border: 0; border-bottom: 1px solid #c9c8c0; border-radius: 0; }
+.module-management-page .module-registration-section .admin-form input,
+.module-management-page .module-registration-section .admin-form select,
+.module-management-page .module-api-configuration .admin-form input,
+.module-management-page .module-api-configuration .admin-form select { min-height: 40px; width: 100%; }
+.module-management-page .module-config-form { margin-bottom: 16px; }
+.module-management-page .module-registration-section h2 { margin-bottom: 18px; }
+.module-management-page .module-registration-section .module-menu-assignment input[type="checkbox"] { width: 16px; height: 16px; min-height: 16px; flex: 0 0 16px; }
+.module-management-page .module-registration-section .module-menu-assignment > .menu-parent-choice { grid-column: 1 / -1; margin: 4px 0; }
+.module-management-page .module-registration-section .menu-submenu-choices > label,
+.module-management-page .module-registration-section .menu-submenu-choices details { min-width: 0; padding: 8px 10px; border: 1px solid #d5dad8; border-radius: 6px; background: #fff; }
+.module-management-page .module-registration-section .menu-submenu-choices > label { margin: 0; }
+.module-management-page .module-registration-section .menu-submenu-choices details summary label { margin: 0; }
 .module-access-field { grid-column: 1 / -1; min-width: 0; padding: 10px; border: 1px solid #c9c8c0; }
 .module-access-field legend { padding: 0 6px; color: #58636a; font-size: 11px; }
 .module-access-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 7px 14px; }

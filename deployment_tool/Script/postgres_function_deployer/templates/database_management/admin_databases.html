@@ -41,10 +41,11 @@
       <div class="admin-section-heading"><h2>Saved connections</h2><span>{{ databases|length }} connections</span></div>
       <div class="table-wrap admin-table-wrap">
         <table class="admin-databases-table">
-          <thead><tr><th>Host</th><th>Port</th><th>Database name</th><th>Username</th><th>Environment</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Host</th><th>Port</th><th>Database name</th><th>Username</th><th>Environment</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="savedDatabaseConnections">
             {% for database in databases %}
               <tr data-connection-id="{{ database.id }}"
+                  data-connected="{{ 'true' if database.id == connected_database_id else 'false' }}"
                   data-host="{{ database.host }}"
                   data-port="{{ database.port }}"
                   data-database="{{ database.databaseName }}"
@@ -56,13 +57,19 @@
                 <td>{{ database.databaseName }}</td>
                 <td>{{ database.username }}</td>
                 <td>{{ database.environment }}</td>
+                <td><span class="badge-status">{{ 'Connected' if database.id == connected_database_id else 'Disconnected' }}</span></td>
                 <td><div class="row-actions">
+                  {% if database.id == connected_database_id %}
+                    <button class="btn btn-sm btn-secondary" type="button" data-disconnect-connection>Disconnect</button>
+                  {% else %}
+                    <button class="btn btn-sm btn-primary" type="button" data-connect-connection>Connect</button>
+                  {% endif %}
                   <button class="btn btn-sm btn-secondary" type="button" data-edit-connection>Edit</button>
                   <button class="btn btn-sm btn-outline-secondary" type="button" data-remove-connection>Remove</button>
                 </div></td>
               </tr>
             {% else %}
-              <tr><td colspan="6" class="empty-state">No saved database connections.</td></tr>
+              <tr><td colspan="7" class="empty-state">No saved database connections.</td></tr>
             {% endfor %}
           </tbody>
         </table>

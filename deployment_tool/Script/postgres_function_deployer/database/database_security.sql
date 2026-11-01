@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS app_security.menus (
     menu_name VARCHAR(150) NOT NULL,
     menu_code VARCHAR(100) UNIQUE NOT NULL,
     menu_type VARCHAR(30) NOT NULL DEFAULT 'INTERNAL' CHECK (menu_type IN ('INTERNAL', 'EXTERNAL', 'GROUP')),
+    menu_classification VARCHAR(24) NOT NULL DEFAULT 'NON_CONFIGURATION'
+        CHECK (menu_classification IN ('CONFIGURATION', 'NON_CONFIGURATION')),
     route_path VARCHAR(500),
     external_url VARCHAR(1000),
     icon VARCHAR(100),
@@ -117,6 +119,8 @@ CREATE TABLE IF NOT EXISTS app_security.modules (
     description TEXT NOT NULL DEFAULT '',
     version VARCHAR(50) NOT NULL,
     module_type VARCHAR(20) NOT NULL CHECK (module_type IN ('INTERNAL', 'EXTERNAL')),
+    module_classification VARCHAR(24) NOT NULL DEFAULT 'NON_CONFIGURATION'
+        CHECK (module_classification IN ('CONFIGURATION', 'NON_CONFIGURATION')),
     is_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     web_url TEXT NOT NULL,
@@ -125,7 +129,7 @@ CREATE TABLE IF NOT EXISTS app_security.modules (
     health_url TEXT,
     entry_path TEXT NOT NULL DEFAULT '/',
     icon VARCHAR(50) NOT NULL DEFAULT 'database',
-    parent_menu_id BIGINT NOT NULL REFERENCES app_security.menus(menu_id) ON DELETE RESTRICT,
+    parent_menu_id BIGINT REFERENCES app_security.menus(menu_id) ON DELETE RESTRICT,
     navigation_menu_id BIGINT UNIQUE REFERENCES app_security.menus(menu_id) ON DELETE RESTRICT,
     display_order INTEGER NOT NULL DEFAULT 0,
     health_status VARCHAR(10) NOT NULL DEFAULT 'UNKNOWN'
@@ -186,6 +190,8 @@ CREATE TABLE IF NOT EXISTS app_security.api_endpoints (
     endpoint_name VARCHAR(150) NOT NULL,
     endpoint_path TEXT NOT NULL UNIQUE
         CHECK (endpoint_path LIKE '/api/%' AND endpoint_path NOT LIKE '//%'),
+    endpoint_source VARCHAR(16) NOT NULL DEFAULT 'EXTERNAL'
+        CHECK (endpoint_source IN ('INTERNAL', 'EXTERNAL')),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_by BIGINT REFERENCES app_security.users(user_id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -197,12 +203,37 @@ CREATE TABLE IF NOT EXISTS app_security.module_api_endpoints (
     assigned_by BIGINT REFERENCES app_security.users(user_id) ON DELETE SET NULL,
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS app_security.api_catalog (
+    api_id BIGSERIAL PRIMARY KEY,
+    api_name VARCHAR(150) NOT NULL,
+    api_type VARCHAR(16) NOT NULL CHECK (api_type IN ('INTERNAL', 'EXTERNAL')),
+    source_key VARCHAR(500) NOT NULL UNIQUE,
+    api_base_url TEXT NOT NULL,
+    web_url TEXT,
+    endpoint_id BIGINT REFERENCES app_security.api_endpoints(endpoint_id) ON DELETE SET NULL,
+    manifest_url TEXT,
+    health_url TEXT,
+    sql_url TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT REFERENCES app_security.users(user_id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (api_type, api_name)
+);
+CREATE TABLE IF NOT EXISTS app_security.module_api_catalog (
+    module_id BIGINT PRIMARY KEY REFERENCES app_security.modules(module_id) ON DELETE CASCADE,
+    api_id BIGINT NOT NULL REFERENCES app_security.api_catalog(api_id) ON DELETE NO ACTION,
+    assigned_by BIGINT REFERENCES app_security.users(user_id) ON DELETE SET NULL,
+    assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS public.tbl_errorlogs (
     error_id BIGSERIAL PRIMARY KEY,
     logged_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     log_level VARCHAR(16) NOT NULL,
     error_type VARCHAR(200),
     error_message TEXT NOT NULL,
+    module VARCHAR(150),
+    operation VARCHAR(500),
     endpoint VARCHAR(500),
     http_method VARCHAR(16),
     http_status INTEGER,
@@ -262,6 +293,7 @@ COMMENT ON COLUMN app_security.menus.parent_menu_id IS 'Optional self-reference 
 COMMENT ON COLUMN app_security.menus.menu_name IS 'Display label for the navigation entry.';
 COMMENT ON COLUMN app_security.menus.menu_code IS 'Unique stable identifier used by application routes and authorization checks.';
 COMMENT ON COLUMN app_security.menus.menu_type IS 'Entry kind: INTERNAL route, EXTERNAL link, or GROUP container.';
+COMMENT ON COLUMN app_security.menus.menu_classification IS 'Stable CONFIGURATION or NON_CONFIGURATION classification used for access and module eligibility.';
 COMMENT ON COLUMN app_security.menus.route_path IS 'Internal Flask route used when menu_type is INTERNAL.';
 COMMENT ON COLUMN app_security.menus.external_url IS 'Destination URL used when menu_type is EXTERNAL.';
 COMMENT ON COLUMN app_security.menus.icon IS 'Icon key consumed by the navigation template.';
@@ -331,6 +363,7 @@ COMMENT ON COLUMN app_security.modules.module_name IS 'Administrator-facing disp
 COMMENT ON COLUMN app_security.modules.description IS 'Human-readable module purpose and capabilities.';
 COMMENT ON COLUMN app_security.modules.version IS 'Version reviewed and registered by an administrator; health checks do not update it automatically.';
 COMMENT ON COLUMN app_security.modules.module_type IS 'INTERNAL for a platform-hosted module or EXTERNAL for an independently hosted module.';
+COMMENT ON COLUMN app_security.modules.module_classification IS 'CONFIGURATION modules are admin-only and excluded from normal user module access.';
 COMMENT ON COLUMN app_security.modules.is_enabled IS 'Administrator-controlled launch switch; disabled modules are hidden and denied.';
 COMMENT ON COLUMN app_security.modules.is_active IS 'Soft-registration state; false de-registers without deleting history or permission rows.';
 COMMENT ON COLUMN app_security.modules.web_url IS 'Internal path or validated HTTPS entry base for the independently hosted frontend.';
@@ -378,7 +411,10 @@ INSERT INTO app_security.menus (menu_name, menu_code, menu_type, route_path, ico
 ('Menu Management', 'MENU_MANAGEMENT', 'INTERNAL', '/admin/menus', 'menu', 3),
 ('Role Permissions', 'ROLE_PERMISSIONS', 'INTERNAL', '/admin/permissions', 'lock', 4),
 ('Database Management', 'DATABASE_MANAGEMENT', 'INTERNAL', '/admin/databases', 'database', 5),
-('Module Management', 'MODULE_MANAGEMENT', 'INTERNAL', '/admin/modules', 'grid', 6)
+('Module Management', 'MODULE_MANAGEMENT', 'INTERNAL', '/admin/modules', 'grid', 6),
+('Database Health', 'DATABASE_HEALTH', 'INTERNAL', '/database-health', 'database', 3),
+('SQL Query Tool', 'SQL_QUERY_TOOL', 'INTERNAL', '/database-tools', 'database', 4),
+('Error Logs', 'ERROR_LOG', 'INTERNAL', '/admin/error-logs', 'history', 7)
 ON CONFLICT (menu_code) DO NOTHING;
 
 UPDATE app_security.menus SET route_path = '/deployment' WHERE menu_code = 'DEPLOYMENT_MANAGER';
@@ -387,6 +423,9 @@ UPDATE app_security.menus SET route_path = '/history#history' WHERE menu_code = 
 UPDATE app_security.menus SET route_path = '/backups#backups' WHERE menu_code = 'BACKUP_REPOSITORY';
 UPDATE app_security.menus SET route_path = '/admin/databases' WHERE menu_code = 'DATABASE_MANAGEMENT';
 UPDATE app_security.menus SET route_path = '/admin/modules' WHERE menu_code = 'MODULE_MANAGEMENT';
+UPDATE app_security.menus SET route_path = '/database-health' WHERE menu_code = 'DATABASE_HEALTH';
+UPDATE app_security.menus SET route_path = '/database-tools' WHERE menu_code = 'SQL_QUERY_TOOL';
+UPDATE app_security.menus SET route_path = '/admin/error-logs' WHERE menu_code = 'ERROR_LOG';
 UPDATE app_security.menus SET display_order = 1 WHERE menu_code = 'DATABASE_MANAGEMENT';
 UPDATE app_security.menus SET display_order = 2 WHERE menu_code = 'USER_MANAGEMENT';
 UPDATE app_security.menus SET display_order = 3 WHERE menu_code = 'ROLE_MANAGEMENT';
@@ -402,13 +441,23 @@ WHERE (child.menu_code, parent.menu_code) IN (
     ('COMPARISON_RESULTS', 'DATABASE_OPERATIONS'),
     ('DEPLOYMENT_HISTORY', 'DATABASE_OPERATIONS'),
     ('BACKUP_REPOSITORY', 'DATABASE_OPERATIONS'),
+    ('DATABASE_HEALTH', 'DATABASE_OPERATIONS'),
+    ('SQL_QUERY_TOOL', 'DATABASE_OPERATIONS'),
     ('USER_MANAGEMENT', 'CONFIGURATION'),
     ('ROLE_MANAGEMENT', 'CONFIGURATION'),
     ('MENU_MANAGEMENT', 'CONFIGURATION'),
     ('ROLE_PERMISSIONS', 'CONFIGURATION'),
     ('DATABASE_MANAGEMENT', 'CONFIGURATION'),
-    ('MODULE_MANAGEMENT', 'CONFIGURATION')
+    ('MODULE_MANAGEMENT', 'CONFIGURATION'),
+    ('ERROR_LOG', 'CONFIGURATION')
 );
+UPDATE app_security.menus
+SET menu_classification = 'CONFIGURATION'
+WHERE menu_code IN (
+    'CONFIGURATION', 'DATABASE_MANAGEMENT', 'USER_MANAGEMENT', 'ROLE_MANAGEMENT',
+    'MENU_MANAGEMENT', 'ROLE_PERMISSIONS', 'MODULE_MANAGEMENT', 'ERROR_LOG'
+)
+   OR route_path LIKE '/admin/%';
 
 UPDATE app_security.menus
 SET parent_menu_id = NULL
@@ -435,11 +484,12 @@ WHERE menu_code IN ('COMPARISON_RESULTS', 'DEPLOYMENT_MANAGER', 'DEPLOYMENT_HIST
 INSERT INTO app_security.role_menu_permissions (role_id, menu_id, can_view, can_create, can_edit, can_delete, can_execute)
 SELECT r.role_id, m.menu_id,
        (r.role_name = 'ADMIN'
-        OR (m.menu_code NOT IN ('USER_MANAGEMENT','ROLE_MANAGEMENT','MENU_MANAGEMENT','ROLE_PERMISSIONS','DATABASE_MANAGEMENT')
+        OR (m.menu_code NOT IN ('USER_MANAGEMENT','ROLE_MANAGEMENT','MENU_MANAGEMENT','ROLE_PERMISSIONS','DATABASE_MANAGEMENT','ERROR_LOG')
             AND (m.menu_code <> 'DEPLOYMENT_MANAGER' OR r.role_name IN ('DBA','DEVELOPER','DEPLOYMENT_USER')))),
     r.role_name = 'ADMIN' AND m.menu_code IN ('USER_MANAGEMENT','ROLE_MANAGEMENT','MENU_MANAGEMENT','DATABASE_MANAGEMENT'),
     r.role_name = 'ADMIN', r.role_name = 'ADMIN' AND m.menu_code IN ('USER_MANAGEMENT','ROLE_MANAGEMENT','MENU_MANAGEMENT','DATABASE_MANAGEMENT'),
-       m.menu_code = 'DEPLOYMENT_MANAGER' AND r.role_name IN ('ADMIN','DBA','DEVELOPER','DEPLOYMENT_USER')
+       m.menu_code IN ('DEPLOYMENT_MANAGER','DATABASE_HEALTH','SQL_QUERY_TOOL')
+           AND r.role_name IN ('ADMIN','DBA','DEVELOPER','DEPLOYMENT_USER')
 FROM app_security.roles r CROSS JOIN app_security.menus m
 ON CONFLICT (role_id, menu_id) DO NOTHING;
 
@@ -452,7 +502,7 @@ SET can_view = (r.role_name = 'ADMIN'),
 FROM app_security.roles r, app_security.menus m
 WHERE p.role_id = r.role_id
     AND p.menu_id = m.menu_id
-    AND m.menu_code IN ('USER_MANAGEMENT','ROLE_MANAGEMENT','MENU_MANAGEMENT','ROLE_PERMISSIONS','DATABASE_MANAGEMENT','MODULE_MANAGEMENT');
+    AND m.menu_code IN ('USER_MANAGEMENT','ROLE_MANAGEMENT','MENU_MANAGEMENT','ROLE_PERMISSIONS','DATABASE_MANAGEMENT','MODULE_MANAGEMENT','ERROR_LOG');
 
 UPDATE app_security.role_menu_permissions p
 SET can_view = (r.role_name IN ('ADMIN','DBA','DEVELOPER','DEPLOYMENT_USER')),
@@ -463,20 +513,28 @@ WHERE p.role_id = r.role_id
     AND m.menu_code = 'DEPLOYMENT_MANAGER';
 
 UPDATE app_security.role_menu_permissions p
+SET can_view = TRUE,
+        can_execute = (r.role_name IN ('ADMIN','DBA','DEVELOPER','DEPLOYMENT_USER'))
+FROM app_security.roles r, app_security.menus m
+WHERE p.role_id = r.role_id
+    AND p.menu_id = m.menu_id
+    AND m.menu_code IN ('DATABASE_HEALTH','SQL_QUERY_TOOL');
+
+UPDATE app_security.role_menu_permissions p
 SET can_view = TRUE
 FROM app_security.menus m
 WHERE p.menu_id = m.menu_id
     AND m.menu_code IN ('DEPLOYMENT_HISTORY', 'BACKUP_REPOSITORY');
 
 INSERT INTO app_security.modules (
-    module_code, module_name, description, version, module_type, is_enabled, is_active,
+    module_code, module_name, description, version, module_type, module_classification, is_enabled, is_active,
     web_url, api_base_url, manifest_url, health_url, entry_path, icon,
     parent_menu_id, navigation_menu_id, display_order, health_status
 )
 SELECT
     'DB_COMPARE', 'DB Compare Tool',
     'Database comparison, function deployment, deployment history, and backup repository.',
-    '1.0.0', 'INTERNAL', TRUE, TRUE, '/comparison', '/api', '/api/module-manifest',
+    '1.0.0', 'INTERNAL', 'NON_CONFIGURATION', TRUE, TRUE, '/comparison', '/api/compare', '/api/module-manifest',
     '/health', '/', 'compare', parent.menu_id, entry.menu_id, 1, 'UP'
 FROM app_security.menus AS entry
 JOIN app_security.menus AS parent ON parent.menu_code = 'DATABASE_OPERATIONS'
@@ -485,6 +543,7 @@ ON CONFLICT (module_code) DO UPDATE SET
     module_name = EXCLUDED.module_name,
     description = EXCLUDED.description,
     module_type = EXCLUDED.module_type,
+    module_classification = EXCLUDED.module_classification,
     web_url = EXCLUDED.web_url,
     api_base_url = EXCLUDED.api_base_url,
     manifest_url = EXCLUDED.manifest_url,
@@ -495,6 +554,39 @@ ON CONFLICT (module_code) DO UPDATE SET
     navigation_menu_id = EXCLUDED.navigation_menu_id,
     display_order = EXCLUDED.display_order,
     updated_at = CURRENT_TIMESTAMP;
+
+INSERT INTO app_security.api_catalog
+    (api_name, api_type, source_key, api_base_url, endpoint_id)
+SELECT 'DB Compare API', 'INTERNAL', 'INTERNAL:compare', '/api/compare',
+       endpoint.endpoint_id
+FROM app_security.modules AS module
+LEFT JOIN app_security.api_endpoints AS endpoint
+  ON endpoint.endpoint_path = '/api/compare' AND endpoint.is_active
+WHERE module.module_code = 'DB_COMPARE'
+ON CONFLICT (source_key) DO UPDATE SET
+    api_name = EXCLUDED.api_name,
+    api_base_url = EXCLUDED.api_base_url,
+    endpoint_id = EXCLUDED.endpoint_id,
+    updated_at = CURRENT_TIMESTAMP;
+
+INSERT INTO app_security.module_api_catalog (module_id, api_id)
+SELECT module.module_id, api.api_id
+FROM app_security.modules AS module
+JOIN app_security.api_catalog AS api
+  ON api.source_key = 'INTERNAL:compare'
+WHERE module.module_code = 'DB_COMPARE'
+ON CONFLICT (module_id) DO NOTHING;
+
+UPDATE app_security.modules AS module
+SET api_base_url = api.api_base_url,
+    updated_at = CURRENT_TIMESTAMP
+FROM app_security.module_api_catalog AS assignment
+JOIN app_security.api_catalog AS api ON api.api_id = assignment.api_id
+WHERE assignment.module_id = module.module_id
+  AND module.module_code = 'DB_COMPARE'
+  AND api.source_key = 'INTERNAL:compare'
+  AND (module.api_base_url IS NULL OR module.api_base_url = '/api'
+       OR module.api_base_url = api.api_base_url);
 
 INSERT INTO app_security.role_module_permissions
     (role_id, module_id, can_view, can_create, can_edit, can_delete, can_execute)
@@ -688,16 +780,18 @@ AS $function$
             JOIN app_security.roles r ON r.role_id = ur.role_id
             WHERE ur.user_id = u.user_id AND r.is_active AND r.role_name = 'ADMIN'
         ))
-        OR (u.module_access_configured AND m.navigation_menu_id IS NOT NULL AND EXISTS (
-            SELECT 1 FROM app_security.user_menu_access uma
-            WHERE uma.user_id = u.user_id AND uma.menu_id = m.navigation_menu_id
-        ))
-        OR ((NOT u.module_access_configured OR m.navigation_menu_id IS NULL) AND EXISTS (
-            SELECT 1 FROM app_security.user_roles ur
-            JOIN app_security.roles r ON r.role_id = ur.role_id AND r.is_active
-            JOIN app_security.role_module_permissions p ON p.role_id = r.role_id
-                AND p.module_id = m.module_id AND p.can_view
-            WHERE ur.user_id = u.user_id
+        OR (m.module_classification = 'NON_CONFIGURATION' AND (
+            (u.module_access_configured AND EXISTS (
+                SELECT 1 FROM app_security.user_module_access uma
+                WHERE uma.user_id = u.user_id AND uma.module_id = m.module_id
+            ))
+            OR (NOT u.module_access_configured AND EXISTS (
+                SELECT 1 FROM app_security.user_roles ur
+                JOIN app_security.roles r ON r.role_id = ur.role_id AND r.is_active
+                JOIN app_security.role_module_permissions p ON p.role_id = r.role_id
+                    AND p.module_id = m.module_id AND p.can_view
+                WHERE ur.user_id = u.user_id
+            ))
         ))
     )
     ORDER BY m.display_order, m.module_name, m.module_id

@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>Database Tools | DBA Operations Platform</title>
+  <title>SQL Query Tool | DBA Operations Platform</title>
   <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
   <link rel="stylesheet" href="/static/shared/css/database-tools.css?v=4">
 </head>
-<body class="app-page">
+<body class="app-page database-tools-page">
   {% include 'shared/partials_sidebar.html' %}
   <header class="topbar dashboard-topbar">
     <div class="page-shell dashboard-topbar-inner">
@@ -16,23 +16,32 @@
       <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
     </div>
   </header>
-  <main class="main-content database-tools">
+  <main class="main-content">
+    <div class="database-tools page-shell">
     <header class="admin-page-heading">
-      <div><p class="eyebrow accent">ACTIVE CONNECTION</p><h1>Database health and SQL</h1></div>
+      <div><p class="eyebrow accent">DATABASE TOOLS</p><h1>SQL Query Tool</h1></div>
       <a class="btn btn-secondary" href="{{ url_for('admin_databases') }}">Manage connections</a>
     </header>
-    <p class="notice">All operations use the active saved connection. Query statements run in a read-only transaction with a five-second timeout and a 500-row response cap.</p>
-    <section class="admin-section" aria-labelledby="healthTitle">
-      <div class="admin-section-heading"><h2 id="healthTitle">PostgreSQL health</h2><button id="refreshHealth" class="btn btn-secondary" type="button">Refresh health</button></div>
-      <p id="healthStatus" class="notice" role="status" aria-live="polite">Loading health information…</p>
-      <div id="healthFacts" class="health-facts"></div>
-      <div class="table-wrap admin-table-wrap">
-        <table class="admin-databases-table">
-          <caption class="sr-only">Tables with the highest estimated dead row counts</caption>
-          <thead><tr><th>Schema</th><th>Table</th><th>Estimated rows</th><th>Dead rows</th><th>Last vacuum</th><th>Last analyze</th></tr></thead>
-          <tbody id="healthTables"><tr><td colspan="6" class="empty-state">Health data has not been loaded.</td></tr></tbody>
-        </table>
-      </div>
+    <p class="notice">Choose a saved connection, then connect before running a query. Query statements run read-only with a five-second timeout and a 500-row response cap.</p>
+    <section class="admin-section database-connection-panel" data-database-connection data-connected-id="{{ connected_database_id or '' }}">
+      <h2>Database connection</h2>
+      {% if databases %}
+        <label for="databaseConnectionSelect">Saved connection
+          <select id="databaseConnectionSelect">
+            {% for database in databases %}
+              <option value="{{ database.id }}"{% if database.id == connected_database_id %} selected{% endif %}>{{ database.database_alias or database.host }} → {{ database.databaseName }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="database-form-actions">
+          <button class="btn btn-primary" type="button" data-connect-selected>Connect</button>
+          <button class="btn btn-secondary" type="button" data-disconnect-selected>Disconnect</button>
+        </div>
+      {% else %}
+        <p class="notice">No database connections available.</p>
+        <a class="btn btn-primary" href="{{ url_for('admin_databases') }}">Go to Database Management → Add Connection</a>
+      {% endif %}
+      <p class="notice" data-connection-status role="status" aria-live="polite">{% if connected_database_id %}Connected{% else %}Disconnected{% endif %}</p>
     </section>
     <section class="admin-section" aria-labelledby="queryTitle">
       <h2 id="queryTitle">Restricted SQL query</h2>
@@ -51,7 +60,9 @@
         </table>
       </div>
     </section>
+    </div>
   </main>
+  <script src="/static/shared/js/database-connection.js?v=1" defer></script>
   <script src="/static/shared/js/database-tools.js?v=1" defer></script>
 </body>
 </html>

@@ -1,6 +1,21 @@
 .database-tools {
   display: grid;
   gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.database-tools > * {
+  min-width: 0;
+}
+
+.database-health-page .database-tools {
+  padding-bottom: 2rem;
+  padding-top: 1.5rem;
+}
+
+.database-tools-page .database-tools {
+  padding: 1.5rem clamp(24px, 3vw, 52px) 2rem clamp(36px, 4vw, 56px);
 }
 
 .database-tools .admin-page-heading,
@@ -37,6 +52,20 @@
   font-weight: 700;
   margin: 0.35rem 0 0;
   overflow-wrap: anywhere;
+}
+
+.health-charts progress {
+  display: block;
+  height: 1.25rem;
+  max-width: 32rem;
+  width: 100%;
+}
+
+.database-connection-panel select {
+  display: block;
+  margin: 0.4rem 0 0.8rem;
+  max-width: 48rem;
+  width: 100%;
 }
 
 .database-tools-warning {

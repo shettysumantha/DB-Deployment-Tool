@@ -1,3 +1,36 @@
+{% macro menu_assignment(parent_id=None, navigation_id=None, classification='NON_CONFIGURATION') -%}
+  {% set assigned_parent = navigation_menus|selectattr('menu_id', 'equalto', parent_id)|first %}
+  {% set root_parent_id = assigned_parent.parent_menu_id if assigned_parent and assigned_parent.parent_menu_id else parent_id %}
+  {% set assigned_submenu_id = parent_id if assigned_parent and assigned_parent.parent_menu_id else none %}
+  <fieldset class="module-menu-assignment" data-menu-assignment>
+    <legend>Parent menu / submenu assignment (optional)</legend>
+    <label>Module Classification<select name="module_classification" data-module-classification>
+      <option value="NON_CONFIGURATION"{% if classification == 'NON_CONFIGURATION' %} selected{% endif %}>Application module</option>
+      <option value="CONFIGURATION"{% if classification == 'CONFIGURATION' %} selected{% endif %}>Configuration (admin only)</option>
+    </select></label>
+    {% for parent in navigation_menus if parent.menu_type == 'GROUP' and parent.parent_menu_id is none %}
+      <label class="menu-parent-choice">
+        <input type="checkbox" data-parent-choice data-classification="{{ parent.menu_classification }}" value="{{ parent.menu_id }}"{% if root_parent_id == parent.menu_id %} checked{% endif %}>
+        {{ parent.menu_name }}
+      </label>
+      <div class="menu-submenu-choices" data-parent-children="{{ parent.menu_id }}"{% if root_parent_id != parent.menu_id %} hidden{% endif %}>
+        {% for child in navigation_menus if child.parent_menu_id == parent.menu_id and child.route_path %}
+          <label><input type="checkbox" data-navigation-choice data-classification="{{ child.menu_classification }}" data-route-parent="{{ child.parent_menu_id }}" data-route-path="{{ child.route_path }}" value="{{ child.menu_id }}"{% if navigation_id == child.menu_id %} checked{% endif %}>{{ child.menu_name }}</label>
+        {% endfor %}
+        {% for submenu in navigation_menus if submenu.parent_menu_id == parent.menu_id and submenu.menu_type == 'GROUP' %}
+          <details>
+            <summary><label><input type="checkbox" data-submenu-choice data-classification="{{ submenu.menu_classification }}" value="{{ submenu.menu_id }}"{% if assigned_submenu_id == submenu.menu_id %} checked{% endif %}>{{ submenu.menu_name }}</label></summary>
+            {% for child in navigation_menus if child.parent_menu_id == submenu.menu_id and child.route_path %}
+              <label><input type="checkbox" data-navigation-choice data-classification="{{ child.menu_classification }}" data-route-parent="{{ child.parent_menu_id }}" data-route-path="{{ child.route_path }}" value="{{ child.menu_id }}"{% if navigation_id == child.menu_id %} checked{% endif %}>{{ child.menu_name }}</label>
+            {% endfor %}
+          </details>
+        {% endfor %}
+      </div>
+    {% endfor %}
+    <input type="hidden" name="parent_menu_id" data-parent-value value="{{ parent_id or '' }}">
+    <input type="hidden" name="navigation_menu_id" data-navigation-value value="{{ navigation_id or '' }}">
+  </fieldset>
+{%- endmacro %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -5,9 +38,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>Module Management | DBA Operations Platform</title>
-  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise6">
 </head>
-<body class="app-page">
+<body class="app-page module-management-page">
   {% include 'shared/partials_sidebar.html' %}
   <header class="topbar dashboard-topbar">
     <div class="page-shell dashboard-topbar-inner">
@@ -18,36 +51,133 @@
   <main class="main-content admin-content">
     <header class="admin-page-heading"><div><p class="eyebrow accent">CONFIGURATION</p><h1>Module Management</h1></div></header>
     <p id="moduleNotice" class="notice d-none" role="status"></p>
-    {% if not endpoint_catalog_available %}<p class="notice error" role="alert">The endpoint catalog is not installed. Apply <code>database/migrations/20261101_module_endpoint_catalog.sql</code> to the application database before using module endpoint registration.</p>{% endif %}
-    <section class="admin-section">
-      <h2>Register external module</h2>
+    {% if not endpoint_catalog_available %}<p class="notice error" role="alert">The module catalogs are not installed. Apply the migrations <code>20261101_module_endpoint_catalog.sql</code>, <code>20261101_database_tool_modules.sql</code>, <code>20261101_z_module_api_catalog.sql</code>, <code>20261101_zz_module_api_assignments.sql</code>, and <code>20261101_zzz_menu_classification.sql</code>.</p>{% endif %}
+    <section class="admin-section module-api-configuration">
+      <h2>API Configuration</h2>
+      <p>Register an internal API using its active main route, then assign it to a module below. Newly registered internal APIs are available in module selectors; child endpoints are not separate API choices.</p>
+      <form id="internalApiForm" class="admin-form module-config-form">
+        <label>Internal API Name<input name="api_name" maxlength="150" required placeholder="Database Health API"></label>
+        <label>Internal API Base URL<input name="api_base_url" required placeholder="/api/database-health"></label>
+        <button class="btn btn-primary" type="submit">Add internal API</button>
+      </form>
+      <form id="externalApiForm" class="admin-form">
+        <input type="hidden" name="api_id">
+        <label>API Name<input name="api_name" maxlength="150" required placeholder="External Monitoring API"></label>
+        <label>Web URL (Optional)<input name="web_url" type="url" placeholder="https://external-system.com"></label>
+        <label>API Base URL<input name="api_base_url" type="url" required placeholder="https://external-system.com/api"></label>
+        <label>Manifest URL (Optional)<input name="manifest_url" type="url"></label>
+        <label>Health URL (Optional)<input name="health_url" type="url"></label>
+        <label>SQL URL (Optional)<input name="sql_url" type="url"></label>
+        <button class="btn btn-primary" type="submit">Save external API</button>
+        <button class="btn btn-secondary" type="button" data-reset-api>Cancel edit</button>
+      </form>
+      <div class="table-wrap admin-table-wrap">
+        <table>
+          <thead><tr><th>API Name</th><th>Type</th><th>Base URL</th><th>Optional URLs</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="apiCatalogRows">
+            {% for api in api_catalog %}
+              <tr data-api-id="{{ api.api_id }}">
+                <td>{{ api.api_name }}</td><td>{{ api.api_type }}</td>
+                <td><code>{{ api.api_base_url }}</code></td>
+                <td>
+                  {% if api.manifest_url %}<div>Manifest: <code>{{ api.manifest_url }}</code></div>{% endif %}
+                  {% if api.api_type == 'EXTERNAL' and api.web_url %}<div>Web: <code>{{ api.web_url }}</code></div>{% endif %}
+                  {% if api.health_url %}<div>Health: <code>{{ api.health_url }}</code></div>{% endif %}
+                  {% if api.sql_url %}<div>SQL: <code>{{ api.sql_url }}</code></div>{% endif %}
+                  {% if api.api_type == 'EXTERNAL' and api.endpoint_path %}<div>Endpoint: <code>{{ api.endpoint_path }}</code></div>{% endif %}
+                </td>
+                <td>{{ 'Enabled' if api.is_active else 'Disabled' }}</td>
+                <td>
+                  {% if api.api_type == 'EXTERNAL' %}
+                    <button class="btn btn-sm btn-secondary" type="button" data-edit-api='{{ api|tojson|forceescape }}'>Edit</button>
+                    <button class="btn btn-sm btn-secondary" type="button" data-api-enabled="{{ 'false' if api.is_active else 'true' }}">{{ 'Disable' if api.is_active else 'Enable' }}</button>
+                  {% endif %}
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="6" class="empty-state">No configured APIs are assigned to active modules.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="admin-section module-registration-section">
+      <h2>Internal Module Registration</h2>
+      <form id="internalModuleForm" class="admin-form">
+        <label>Module Name<input name="module_name" maxlength="150" required placeholder="Database Health"></label>
+        <label>Module Code<input name="module_code" maxlength="100" required placeholder="DATABASE_HEALTH"></label>
+        <label>API Base URL<select name="api_id" data-api-selector data-api-types="INTERNAL">
+          <option value="">Select a main API base URL</option>
+        </select></label>
+        <label>Manifest URL<input type="text" data-api-field="manifest_url" readonly></label>
+        <label>Health URL<input type="text" data-api-field="health_url" readonly></label>
+        <label>SQL URL<input type="text" data-api-field="sql_url" readonly></label>
+        {{ menu_assignment() }}
+        <input type="hidden" name="route_path" data-module-route-value>
+        <label>Display order<input name="display_order" type="number" min="0" value="10"></label>
+        <button class="btn btn-primary" type="submit">Create Internal Module</button>
+      </form>
+    </section>
+    <section class="admin-section module-registration-section">
+      <h2>Register External Module</h2>
       <form id="moduleRegisterForm" class="admin-form">
-        <label>Web URL<input name="web_url" type="url" placeholder="https://module.example.com/"></label>
-        <label>API Base URL (Optional)<input name="api_base_url" type="url" placeholder="https://module.example.com/api"></label>
-        <label>Manifest URL (Optional)<input name="manifest_url" type="url" placeholder="https://module.example.com/api/module-manifest"></label>
-        <label>Health URL (Optional)<input name="health_url" type="url" placeholder="https://module.example.com/api/health"></label>
-        <label>Endpoint name (Optional)<input name="endpoint_name" maxlength="150" placeholder="Database Health API"></label>
-        <label>Endpoint path (Optional)<input name="endpoint_path" maxlength="500" placeholder="/api/database-health"></label>
-        <label>Parent menu<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}">{% if parent.parent_menu_name %}{{ parent.parent_menu_name }} / {% endif %}{{ parent.menu_name }}</option>{% else %}<option value="" disabled selected>No active parent menus are available</option>{% endfor %}</select></label>
+        <label>Module Name<input name="module_name" maxlength="150" placeholder="DB Schema Tracker"></label>
+        <label>Web URL<input name="web_url" type="url" required placeholder="https://module.example.com/" data-api-field="web_url"></label>
+        <label>API Name<select name="api_id" data-api-selector data-api-types="EXTERNAL"><option value="">No API assigned</option></select></label>
+        <label>API Base URL (Optional)<input name="api_base_url" type="url" placeholder="https://module.example.com/api" data-api-field="api_base_url"></label>
+        <label>Manifest URL (Optional)<input name="manifest_url" type="url" placeholder="https://module.example.com/api/module-manifest" data-api-field="manifest_url"></label>
+        <label>Health URL (Optional)<input name="health_url" type="url" placeholder="https://module.example.com/api/health" data-api-field="health_url"></label>
+        {{ menu_assignment() }}
         <label>Display order<input name="display_order" type="number" min="0" value="10"></label>
         <button id="validateModule" class="btn btn-secondary" type="button">Validate module</button>
         <button id="registerModule" class="btn btn-primary" type="submit" disabled>Register disabled module</button>
       </form>
       <pre id="manifestPreview" class="d-none" aria-live="polite"></pre>
     </section>
+    <section class="admin-section module-registration-section">
+      <h2>Convert Existing Menu to Module</h2>
+      <p>Conversion keeps the existing route and menu. It does not create another menu or submenu.</p>
+      <div class="table-wrap admin-table-wrap">
+        <table>
+          <thead><tr><th>Menu Name</th><th>Route</th><th>Parent Menu</th><th>Module</th><th></th></tr></thead>
+          <tbody>
+            {% for menu in navigation_menus if menu.menu_type == 'INTERNAL' and menu.route_path and menu.menu_classification == 'NON_CONFIGURATION' %}
+              {% set linked_module = modules|selectattr('navigation_menu_id', 'equalto', menu.menu_id)|first %}
+              <tr data-convert-menu="{{ menu.menu_id }}">
+                <td>{{ menu.menu_name }}</td><td><code>{{ menu.route_path }}</code></td>
+                {% set menu_parent = navigation_menus|selectattr('menu_id', 'equalto', menu.parent_menu_id)|first %}
+                <td>{{ menu_parent.menu_name if menu_parent else 'None' }}</td>
+                <td>{{ linked_module.module_name if linked_module else 'Not a module' }}</td>
+                <td>{% if not linked_module %}<button class="btn btn-sm btn-primary" type="button" data-convert-to-module>Convert to Module</button>{% else %}<span>Already converted</span>{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
     <section class="admin-section">
       <div class="admin-section-heading"><h2>Registered modules</h2><span>{{ modules|length }} records</span></div>
       <div class="table-wrap admin-table-wrap">
         <table>
-          <thead><tr><th>Module</th><th>Version</th><th>Navigation</th><th>Health</th><th>Enabled</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Module Name</th><th>Type</th><th>Classification</th><th>Menu</th><th>Parent Menu</th><th>Submenu</th><th>API Name</th><th>API Base URL</th><th>Route</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             {% for module in modules %}
+              {% set nav_menu = navigation_menus|selectattr('menu_id', 'equalto', module.navigation_menu_id)|first %}
+              {% set parent_menu = navigation_menus|selectattr('menu_id', 'equalto', module.parent_menu_id)|first %}
+              {% set module_root_parent = navigation_menus|selectattr('menu_id', 'equalto', parent_menu.parent_menu_id)|first if parent_menu and parent_menu.parent_menu_id else parent_menu %}
+              {% set module_submenu = parent_menu if parent_menu and parent_menu.parent_menu_id else none %}
+              {% set assigned_api = api_catalog|selectattr('api_id', 'equalto', module_api_assignments.get(module.module_id))|first %}
               <tr data-module-id="{{ module.module_id }}">
-                <td><strong>{{ module.module_name }}</strong><br><code>{{ module.module_code }}</code><br><small>{{ module.module_type }}</small></td>
-                <td>{{ module.version }}</td>
-                <td>{% set submenu = parents|selectattr('menu_id', 'equalto', module.parent_menu_id)|first %}{% if submenu %}{% if submenu.parent_menu_name %}{{ submenu.parent_menu_name }} / {% endif %}{{ submenu.menu_name }}{% else %}{{ module.parent_menu_name or 'Unassigned' }} <small>(legacy parent)</small>{% endif %}<br><small>Order {{ module.display_order }}</small></td>
-                <td><span class="badge-status badge-{{ module.health_status|lower }}">{{ module.health_status }}</span>{% if module.last_health_check_at %}<br><small>{{ module.last_health_check_at.strftime('%Y-%m-%d %H:%M') }}</small>{% endif %}</td>
-                <td>{{ 'Enabled' if module.is_enabled else 'Disabled' }}{% if not module.is_active %}<br><small>De-registered</small>{% endif %}</td>
+                <td><strong>{{ module.module_name }}</strong><br><code>{{ module.module_code }}</code></td>
+                <td>{{ module.module_type }}</td>
+                <td>{{ module.module_classification|replace('_', ' ')|title }}</td>
+                <td>{{ nav_menu.menu_name if nav_menu else 'None' }}</td>
+                <td>{{ module_root_parent.menu_name if module_root_parent else 'None' }}</td>
+                <td>{{ module_submenu.menu_name if module_submenu else 'None' }}</td>
+                <td>{{ assigned_api.api_name if assigned_api else 'None' }}</td>
+                <td><code>{{ assigned_api.api_base_url if assigned_api else module.api_base_url or 'None' }}</code></td>
+                <td><code>{{ module.web_url }}</code></td>
+                <td><span class="badge-status badge-{{ module.health_status|lower }}">{{ module.health_status }}</span><br>{{ 'Enabled' if module.is_enabled else 'Disabled' }}{% if not module.is_active %}<br><small>De-registered</small>{% endif %}</td>
                 <td>
                   <div class="row-actions">
                     {% if module.is_active %}
@@ -59,21 +189,22 @@
                 </td>
               </tr>
               {% if module.is_active %}
-                <tr><td colspan="6">
+                <tr><td colspan="11">
                   <details>
                     <summary>Module settings and role permissions</summary>
                     <form class="admin-form module-edit-form" data-module-id="{{ module.module_id }}">
                       <label>Module name<input name="module_name" value="{{ module.module_name }}" maxlength="150" required></label>
                       <label>Description<input name="description" value="{{ module.description }}" maxlength="2000"></label>
                       <label>Version<input name="version" value="{{ module.version }}" required></label>
-                      <label>Web URL<input name="web_url" value="{{ module.web_url }}" required></label>
-                      <label>API Base URL (Optional)<input name="api_base_url" value="{{ module.api_base_url or '' }}"></label>
-                      <label>Manifest URL (Optional)<input name="manifest_url" value="{{ module.manifest_url or '' }}"></label>
-                      <label>Health URL (Optional)<input name="health_url" value="{{ module.health_url or '' }}"></label>
-                      <label>API endpoint<select name="endpoint_id" data-endpoint-selector data-selected-endpoint="{{ module_endpoint_assignments.get(module.module_id, '') }}"><option value="">No endpoint assigned</option></select></label>
+                      <label>Web URL<input name="web_url" value="{{ module.web_url }}" required{% if module.module_type == 'EXTERNAL' %} data-api-field="web_url"{% endif %}></label>
+                      <label>API Name<select name="api_id" data-api-selector data-api-types="{{ module.module_type }}" data-selected-api="{{ module_api_assignments.get(module.module_id, '') }}"><option value="">No API assigned</option></select></label>
+                      <label>API Base URL (Optional)<input name="api_base_url" value="{{ module.api_base_url or '' }}" data-api-field="api_base_url"></label>
+                      <label>Manifest URL (Optional)<input name="manifest_url" value="{{ module.manifest_url or '' }}" data-api-field="manifest_url"></label>
+                      <label>Health URL (Optional)<input name="health_url" value="{{ module.health_url or '' }}" data-api-field="health_url"></label>
+                      <label>SQL URL (Optional)<input name="sql_url" value="{{ module.sql_url or '' }}" data-api-field="sql_url"></label>
                       <label>Entry path<input name="entry_path" value="{{ module.entry_path }}" required></label>
                       <label>Icon<input name="icon" value="{{ module.icon }}" required></label>
-                      <label>Parent menu<select name="parent_menu_id" required>{% if not (parents|selectattr('menu_id', 'equalto', module.parent_menu_id)|list) %}<option value="{{ module.parent_menu_id }}" selected>{{ module.parent_menu_name }} (legacy parent)</option>{% endif %}{% for parent in parents %}<option value="{{ parent.menu_id }}"{% if parent.menu_id == module.parent_menu_id %} selected{% endif %}>{% if parent.parent_menu_name %}{{ parent.parent_menu_name }} / {% endif %}{{ parent.menu_name }}</option>{% else %}{% if parents|length == 0 %}<option value="" disabled>No active parent menus are available</option>{% endif %}{% endfor %}</select></label>
+                      {{ menu_assignment(module.parent_menu_id, module.navigation_menu_id, module.module_classification) }}
                       <label>Display order<input name="display_order" type="number" min="0" value="{{ module.display_order }}"></label>
                       <button class="btn btn-secondary" type="submit">Save settings</button>
                     </form>
@@ -92,7 +223,7 @@
                 </td></tr>
               {% endif %}
             {% else %}
-              <tr><td colspan="6" class="empty-state">No modules are registered.</td></tr>
+              <tr><td colspan="11" class="empty-state">No modules are registered.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -132,36 +263,136 @@
       }
       return data;
     };
-    async function loadEndpointCatalog() {
+    document.getElementById('internalApiForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
       try {
-        const result = await send('/api/admin/module-endpoints', 'GET');
-        document.querySelectorAll('[data-endpoint-selector]').forEach(select => {
-          const selected = select.dataset.selectedEndpoint;
+        await send('/api/admin/module-apis/internal', 'POST', Object.fromEntries(new FormData(form)));
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    });
+    const apiSelects = [...document.querySelectorAll('[data-api-selector]')];
+    let apiCatalog = [];
+    async function loadApiCatalog() {
+      try {
+        const result = await send('/api/admin/module-apis', 'GET');
+        apiCatalog = result.apis || [];
+        apiSelects.forEach(select => {
+          const selected = select.dataset.selectedApi || select.value;
+          const apiTypes = (select.dataset.apiTypes || '').split(',').filter(Boolean);
           const placeholder = document.createElement('option');
           placeholder.value = '';
-          placeholder.textContent = 'No endpoint assigned';
+          placeholder.textContent = 'No API assigned';
           select.replaceChildren(placeholder);
-          result.endpoints.forEach(endpoint => {
+          apiCatalog.filter(api => api.is_active && (!apiTypes.length || apiTypes.includes(api.api_type))).forEach(api => {
             const option = document.createElement('option');
-            option.value = endpoint.endpoint_id;
-            option.textContent = `${endpoint.endpoint_name} (${endpoint.endpoint_path})`;
+            option.value = api.api_id;
+            option.textContent = api.api_type === 'INTERNAL'
+              ? `${api.api_name} - ${api.api_base_url}`
+              : api.api_name;
+            option.dataset.api = JSON.stringify(api);
             select.append(option);
           });
-          select.value = selected;
+          if (selected) {
+            select.value = selected;
+            select.dispatchEvent(new Event('change'));
+          }
         });
       } catch (error) {
         showNotice(error.message, true);
       }
     }
+    const fillApiFields = select => {
+      const api = apiCatalog.find(item => String(item.api_id) === select.value);
+      const form = select.closest('form');
+      form.querySelectorAll('[data-api-field]').forEach(field => {
+        const value = api?.[field.dataset.apiField] || '';
+        if (value) {
+          field.value = value;
+          field.dataset.apiPopulated = 'true';
+          field.dispatchEvent(new Event('input', {bubbles: true}));
+        } else if (field.dataset.apiPopulated === 'true') {
+          field.value = '';
+          delete field.dataset.apiPopulated;
+          field.dispatchEvent(new Event('input', {bubbles: true}));
+        }
+      });
+    };
+    apiSelects.forEach(select => select.addEventListener('change', () => fillApiFields(select)));
+    document.querySelectorAll('[data-menu-assignment]').forEach(assignment => {
+      const parents = [...assignment.querySelectorAll('[data-parent-choice]')];
+      const submenuChoices = [...assignment.querySelectorAll('[data-submenu-choice]')];
+      const submenus = [...assignment.querySelectorAll('[data-navigation-choice]')];
+      const parentValue = assignment.querySelector('[data-parent-value]');
+      const navigationValue = assignment.querySelector('[data-navigation-value]');
+      const routeValue = assignment.closest('form').querySelector('[data-module-route-value]');
+      const update = () => {
+        const selectedParent = parents.find(parent => parent.checked);
+        const selectedSubmenu = submenuChoices.find(menu => menu.checked);
+        const selectedNavigation = submenus.find(menu => menu.checked);
+        const classificationField = assignment.querySelector('[data-module-classification]');
+        for (const parent of parents) {
+          const children = assignment.querySelector(`[data-parent-children="${CSS.escape(parent.value)}"]`);
+          if (children) children.hidden = !parent.checked;
+        }
+        parentValue.value = selectedNavigation?.dataset.routeParent
+          || selectedSubmenu?.value
+          || selectedParent?.value
+          || '';
+        navigationValue.value = selectedNavigation?.value || '';
+        if (routeValue) routeValue.value = selectedNavigation?.dataset.routePath || '';
+        const selectedClassification = selectedNavigation?.dataset.classification
+          || selectedSubmenu?.dataset.classification
+          || selectedParent?.dataset.classification;
+        if (selectedClassification && classificationField) {
+          classificationField.value = selectedClassification;
+        }
+      };
+      parents.forEach(parent => parent.addEventListener('change', () => {
+        if (parent.checked) {
+          parents.forEach(other => {
+            other.checked = other === parent;
+            assignment.querySelector(`[data-parent-children="${CSS.escape(other.value)}"]`)
+              ?.querySelectorAll('[data-navigation-choice], [data-submenu-choice]')
+              .forEach(menu => { menu.checked = false; });
+          });
+        } else {
+          const children = assignment.querySelector(`[data-parent-children="${CSS.escape(parent.value)}"]`);
+          children?.querySelectorAll('[data-navigation-choice], [data-submenu-choice]').forEach(menu => { menu.checked = false; });
+        }
+        update();
+      }));
+      submenuChoices.forEach(menu => menu.addEventListener('change', () => {
+        if (menu.checked) {
+          const children = menu.closest('[data-parent-children]');
+          parents.forEach(parent => { parent.checked = parent.value === children.dataset.parentChildren; });
+          submenuChoices.forEach(other => { if (other !== menu) other.checked = false; });
+          children.querySelectorAll('[data-navigation-choice]').forEach(route => { route.checked = false; });
+        }
+        update();
+      }));
+      submenus.forEach(menu => menu.addEventListener('change', () => {
+        if (menu.checked) {
+          const children = menu.closest('[data-parent-children]');
+          parents.forEach(parent => { parent.checked = parent.value === children.dataset.parentChildren; });
+          submenus.forEach(other => { if (other !== menu) other.checked = false; });
+          submenuChoices.forEach(other => {
+            other.checked = menu.closest('details')?.querySelector('[data-submenu-choice]') === other;
+          });
+        }
+        update();
+      }));
+      update();
+    });
     const registerForm = document.getElementById('moduleRegisterForm');
     const registerButton = document.getElementById('registerModule');
     const endpointPayload = () => ({
+      module_name: registerForm.elements.module_name.value.trim(),
       web_url: registerForm.elements.web_url.value.trim(),
       api_base_url: registerForm.elements.api_base_url.value.trim(),
       manifest_url: registerForm.elements.manifest_url.value.trim(),
       health_url: registerForm.elements.health_url.value.trim(),
-      endpoint_name: registerForm.elements.endpoint_name.value.trim(),
-      endpoint_path: registerForm.elements.endpoint_path.value.trim(),
+      api_id: registerForm.elements.api_id.value,
     });
     let validatedEndpoints = '';
     document.getElementById('validateModule').addEventListener('click', async () => {
@@ -192,6 +423,8 @@
         const result = await send('/api/admin/modules', 'POST', {
           ...endpoints,
           parent_menu_id: registerForm.elements.parent_menu_id.value,
+          navigation_menu_id: registerForm.elements.navigation_menu_id.value,
+          module_classification: registerForm.elements.module_classification.value,
           display_order: registerForm.elements.display_order.value,
         });
         if (result.already_registered) {
@@ -199,7 +432,7 @@
             message: result.message,
             moduleId: result.module.module_id,
           }));
-          loadEndpointCatalog();
+          loadApiCatalog();
         }
         location.reload();
       } catch (error) { showNotice(error.message, true); }
@@ -227,6 +460,63 @@
         location.reload();
       } catch (error) { showNotice(error.message, true); }
     }));
+    document.getElementById('internalModuleForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const payload = Object.fromEntries(new FormData(form));
+      if (!payload.route_path) {
+        showNotice('Select a page from the menu options to create an internal module.', true);
+        return;
+      }
+      try {
+        await send('/api/admin/modules/internal', 'POST', payload);
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    });
+    document.querySelectorAll('[data-convert-to-module]').forEach(button => button.addEventListener('click', async () => {
+      const row = button.closest('[data-convert-menu]');
+      try {
+        await send(`/api/admin/modules/from-menu/${row.dataset.convertMenu}`, 'POST', {
+          module_name: prompt('Module name:', row.cells[0].textContent.replace(/\s+Dashboard$/i, '').trim()) || undefined,
+        });
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    }));
+    const externalApiForm = document.getElementById('externalApiForm');
+    const resetApiForm = () => {
+      externalApiForm.reset();
+      externalApiForm.elements.api_id.value = '';
+      externalApiForm.querySelector('[type=submit]').textContent = 'Save external API';
+    };
+    document.querySelectorAll('[data-reset-api]').forEach(button => button.addEventListener('click', resetApiForm));
+    externalApiForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const payload = Object.fromEntries(new FormData(externalApiForm));
+      const apiId = payload.api_id;
+      delete payload.api_id;
+      try {
+        await send(apiId ? `/api/admin/module-apis/${encodeURIComponent(apiId)}` : '/api/admin/module-apis', apiId ? 'PUT' : 'POST', payload);
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    });
+    document.querySelectorAll('[data-edit-api]').forEach(button => button.addEventListener('click', () => {
+      const api = JSON.parse(button.dataset.editApi);
+      externalApiForm.elements.api_id.value = api.api_id;
+      for (const field of ['api_name', 'web_url', 'api_base_url', 'manifest_url', 'health_url', 'sql_url']) {
+        externalApiForm.elements[field].value = api[field] || '';
+      }
+      externalApiForm.querySelector('[type=submit]').textContent = 'Update external API';
+      externalApiForm.scrollIntoView({behavior: 'smooth', block: 'start'});
+    }));
+    document.querySelectorAll('[data-api-enabled]').forEach(button => button.addEventListener('click', async () => {
+      const apiId = button.closest('[data-api-id]').dataset.apiId;
+      try {
+        await send(`/api/admin/module-apis/${encodeURIComponent(apiId)}/enabled`, 'PUT', {
+          enabled: button.dataset.apiEnabled === 'true',
+        });
+        location.reload();
+      } catch (error) { showNotice(error.message, true); }
+    }));
     document.querySelectorAll('.module-edit-form').forEach(form => form.addEventListener('submit', async event => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(form));
@@ -243,6 +533,7 @@
         showNotice(`Permissions saved for ${form.querySelector('strong').textContent}.`);
       } catch (error) { showNotice(error.message, true); }
     }));
+    loadApiCatalog();
   </script>
 </body>
 </html>

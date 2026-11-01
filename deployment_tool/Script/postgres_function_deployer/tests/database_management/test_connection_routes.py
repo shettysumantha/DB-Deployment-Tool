@@ -47,68 +47,69 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
     def _headers(self):
         return {"X-CSRFToken": "test-csrf"}
 
-    def test_active_database_list_is_per_session(self):
-        record = {
-            "id": 8,
-            "host": "db.example.test",
-            "databaseName": "demo",
-        }
-        with patch.object(
-            self.app_module, "list_databases", return_value=[record]
-        ), patch.object(self.app_module, "_active_database_record", return_value=record):
-            response = self.client.get("/api/active-database")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["connections"], [record])
-        self.assertEqual(response.json["active_connection"], record)
-        self.app_module.require_any_permission.assert_called_with(
-            "DATABASE_MANAGEMENT",
-            "DEPLOYMENT_MANAGER",
-            "COMPARISON_RESULTS",
-            permission="can_execute",
-        )
-
-    def test_switching_active_database_tests_then_sets_new_session_selection(self):
+    def test_saved_connection_is_connected_only_after_explicit_connect(self):
         record = {
             "id": 22,
             "host": "db.example.test",
             "databaseName": "test_db",
         }
         with self.client.session_transaction() as user_session:
-            user_session["active_database_id"] = 17
+            user_session["connected_database_id"] = 17
         with patch.object(self.app_module, "get_database", return_value=record), patch.object(
             self.app_module, "_payload_config", return_value={"database": "test_db"}
         ), patch.object(
             self.app_module, "test_connection", return_value={"database": "test_db"}
         ) as test_connection:
-            response = self.client.put(
-                "/api/active-database",
-                json={"database_id": 22},
+            response = self.client.post(
+                "/api/database-connections/22/connect",
                 headers=self._headers(),
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["active_connection"], record)
+        self.assertEqual(response.json["connected_connection"], record)
         test_connection.assert_called_once_with({"database": "test_db"})
         with self.client.session_transaction() as user_session:
-            self.assertEqual(user_session["active_database_id"], 22)
+            self.assertEqual(user_session["connected_database_id"], 22)
 
-    def test_failed_switch_clears_previous_active_database(self):
+    def test_failed_connect_does_not_leave_a_connection_active(self):
         with self.client.session_transaction() as user_session:
-            user_session["active_database_id"] = 17
+            user_session["connected_database_id"] = 17
         with patch.object(
             self.app_module, "get_database", side_effect=ValueError("not found")
         ):
-            response = self.client.put(
-                "/api/active-database",
-                json={"database_id": 999},
+            response = self.client.post(
+                "/api/database-connections/999/connect",
                 headers=self._headers(),
             )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIsNone(response.json["active_connection"])
+        self.assertIsNone(response.json["connected_connection"])
+        with self.client.session_transaction() as user_session:
+            self.assertNotIn("connected_database_id", user_session)
+
+    def test_legacy_auto_selected_connection_is_not_treated_as_connected(self):
+        with self.client.session_transaction() as user_session:
+            user_session["active_database_id"] = 17
+        with patch.object(self.app_module, "inspect_database") as inspect_database:
+            response = self.client.get("/api/database-health")
+        self.assertEqual(response.status_code, 409)
+        inspect_database.assert_not_called()
         with self.client.session_transaction() as user_session:
             self.assertNotIn("active_database_id", user_session)
+            self.assertNotIn("connected_database_id", user_session)
+
+    def test_disconnect_keeps_the_saved_connection_and_clears_session_state(self):
+        with self.client.session_transaction() as user_session:
+            user_session["connected_database_id"] = 17
+        with patch.object(self.app_module, "_connected_database_record", return_value=None):
+            response = self.client.post(
+                "/api/database-connections/17/disconnect",
+                headers=self._headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json["connected_connection"])
+        with self.client.session_transaction() as user_session:
+            self.assertNotIn("connected_database_id", user_session)
 
     def test_create_connection_does_not_require_alias(self):
         record = {"id": 17, "host": "db.example.test", "databaseName": "demo"}
@@ -137,10 +138,12 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json["database"], record)
         self.assertIsNone(save_database.call_args.args[0])
+        with self.client.session_transaction() as user_session:
+            self.assertNotIn("connected_database_id", user_session)
 
     def test_delete_removes_only_selected_saved_connection_and_clears_active_state(self):
         with self.client.session_transaction() as user_session:
-            user_session["active_database_id"] = 17
+            user_session["connected_database_id"] = 17
         with patch.object(self.app_module, "delete_database") as delete_database:
             response = self.client.delete(
                 "/api/admin/database-connections/17",
@@ -150,10 +153,10 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         delete_database.assert_called_once_with(17)
         with self.client.session_transaction() as user_session:
-            self.assertNotIn("active_database_id", user_session)
+            self.assertNotIn("connected_database_id", user_session)
 
     def test_database_health_requires_an_active_connection(self):
-        with patch.object(self.app_module, "_active_database_record", return_value=None), patch.object(
+        with patch.object(self.app_module, "_connected_database_record", return_value=None), patch.object(
             self.app_module, "inspect_database"
         ) as inspect_database:
             response = self.client.get("/api/database-health")
@@ -165,23 +168,34 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
         response = self.client.get("/database-tools")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"PostgreSQL health", response.data)
+        self.assertIn(b"SQL Query Tool", response.data)
         self.assertIn(b"Restricted SQL query", response.data)
+        self.assertIn(b'<div class="database-tools page-shell">', response.data)
 
-    def test_error_log_page_is_admin_only_and_shows_recent_logs(self):
+    def test_database_health_dashboard_uses_saved_connections(self):
+        with patch.object(self.app_module, "list_databases", return_value=[]):
+            response = self.client.get("/database-health")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Database Health Dashboard", response.data)
+        self.assertIn(b"No database connections available.", response.data)
+        self.assertIn(b"Go to Database Management", response.data)
+
+    def test_error_log_page_shows_at_most_220_recent_logs(self):
         logged_error = {
             "error_id": 1,
             "logged_at": None,
             "log_level": "ERROR",
             "error_type": "RuntimeError",
             "error_message": "test failure",
+            "module": "admin_modules",
+            "operation": "GET /admin/modules",
             "endpoint": "/admin/modules",
             "http_method": "GET",
             "http_status": 500,
             "username": "admin",
             "request_id": "test-request",
         }
-        with patch.object(self.app_module, "user_has_role", return_value=True), patch.object(
+        with patch.object(
             self.app_module, "list_error_logs", return_value=[logged_error]
         ) as list_error_logs:
             response = self.client.get("/admin/error-logs")
@@ -189,15 +203,23 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Application Error Logs", response.data)
         self.assertIn(b"test failure", response.data)
-        list_error_logs.assert_called_once_with(100, 0)
+        list_error_logs.assert_called_once_with(220, 0, "")
 
-    def test_error_log_page_denies_non_admin_users(self):
-        with patch.object(self.app_module, "user_has_role", return_value=False), patch.object(
+    def test_error_log_page_and_api_enforce_permission(self):
+        def enforce_permission(code, permission="can_view"):
+            if not self.app_module._permission_granted(code, permission):
+                from flask import abort
+                abort(403)
+
+        with patch.object(self.app_module, "_permission_granted", return_value=False), patch.object(
+            self.app_module, "require_permission", side_effect=enforce_permission
+        ), patch.object(
             self.app_module, "list_error_logs"
         ) as list_error_logs:
             response = self.client.get("/admin/error-logs")
-
+            api_response = self.client.get("/api/admin/error-logs")
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(api_response.status_code, 403)
         list_error_logs.assert_not_called()
 
     def test_database_health_uses_only_the_active_saved_connection(self):
@@ -208,20 +230,25 @@ class DatabaseConnectionRouteTests(unittest.TestCase):
             "databaseName": "demo",
             "environment": "TEST",
         }
-        health = {"database": {"database_name": "demo"}, "statistics": {}, "tables": []}
-        with patch.object(self.app_module, "_active_database_record", return_value=record), patch.object(
+        health = {
+            "overview": {"database_name": "demo"},
+            "storage": {"tables": [], "indexes": [], "unused_indexes": []},
+            "performance": {},
+            "maintenance": {},
+        }
+        with patch.object(self.app_module, "_connected_database_record", return_value=record), patch.object(
             self.app_module, "_payload_config", return_value={"database": "demo"}
         ), patch.object(self.app_module, "inspect_database", return_value=health) as inspect_database:
             response = self.client.get("/api/database-health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["connection"]["id"], 22)
-        self.assertEqual(response.json["database"]["database_name"], "demo")
+        self.assertEqual(response.json["overview"]["database_name"], "demo")
         inspect_database.assert_called_once_with({"database": "demo"})
 
     def test_vacuum_analyze_requires_explicit_confirmation(self):
         record = {"id": 22}
-        with patch.object(self.app_module, "_active_database_record", return_value=record), patch.object(
+        with patch.object(self.app_module, "_connected_database_record", return_value=record), patch.object(
             self.app_module, "_payload_config", return_value={"database": "demo"}
         ), patch.object(self.app_module, "vacuum_analyze") as vacuum_analyze:
             response = self.client.post(
