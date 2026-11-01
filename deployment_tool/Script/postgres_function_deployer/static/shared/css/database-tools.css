@@ -53,6 +53,10 @@
   width: 100%;
 }
 
+.main-content.database-tools {
+  padding: 1.5rem clamp(24px, 3vw, 52px) 2rem clamp(36px, 4vw, 56px);
+}
+
 .database-tools .table-wrap {
   margin-top: 1rem;
 }
