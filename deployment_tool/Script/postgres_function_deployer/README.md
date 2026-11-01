@@ -77,6 +77,8 @@ Copy-Item .env.example .env
 
 Edit `.env` locally. It may contain secrets and must never be pushed to GitHub. The template contains names only and no real credentials.
 
+Set `DATABASE_CREDENTIALS_ENCRYPTION_KEY` to a generated Fernet key before saving database connections. The Database Management store encrypts connection passwords at rest and never returns them in list/detail responses. Keep the key in the hosting provider's secret environment, separate from source control. Changing or losing the key makes stored passwords unreadable; retain the current key or re-save all connection passwords after rotating it. `APP_DATABASE_URL` is an internal application connection and is not automatically added to the Database Management list.
+
 ### Application variables
 
 ```env
@@ -215,6 +217,8 @@ python -m gunicorn app:app
 The same command is used on Render. Stop a development server with `Ctrl+C` before starting another process on the same port.
 
 ## 7. Deployment and Backup Behavior
+
+The home dashboard reports the current worker's application/security-database initialization state, recent HTTP request latency (average and p95 over five minutes), error count, slowest route patterns, and process uptime. It provides threshold-based review suggestions; these are HTTP end-to-end timings, not per-query PostgreSQL measurements. Request samples are held in memory, capped at 2,000, and reset on process restart; with multiple Gunicorn workers the dashboard reflects the worker that serves the request, not a cluster-wide or durable performance store.
 
 The existing deployment logic remains responsible for:
 

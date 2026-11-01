@@ -7,7 +7,7 @@ const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 const menus = {{ menus|tojson }};
 const parentMenuSelect = form.elements.parent_menu_id;
 const filterParentMenus = () => {
-	const currentMenuId = Number(form.elements.menu_id.value) || null;
+	const currentMenuId = form.elements.menu_id.value || null;
 	const isSubmenu = form.elements.menu_type.value === 'GROUP';
 	[...parentMenuSelect.options].forEach(option => {
 		if (!option.value) return;

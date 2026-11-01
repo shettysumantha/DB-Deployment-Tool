@@ -17,6 +17,7 @@
   </header>
   <main class="main-content admin-content">
     <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Database Management</h1></div></header>
+    <p class="notice">Only connections explicitly saved here are listed. The internal application database is not added automatically. Saved passwords are encrypted at rest and never sent back to the browser.</p>
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for category, message in messages %}<div class="notice {{ 'error' if category == 'error' else '' }}">{{ message }}</div>{% endfor %}
     {% endwith %}
@@ -50,10 +51,11 @@
                 <label>Port<input name="port" value="{{ database.port }}" required></label>
                 <label>Database<input name="database" value="{{ database.databaseName }}" required></label>
                 <label>Username<input name="username" value="{{ database.username }}" required></label>
-                <label>New password<input name="password" type="password" autocomplete="new-password" placeholder="Not stored"></label>
+                <label>New password<input name="password" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved password"></label>
                 <label>Environment<select name="environment">{% for environment in ('LOCAL', 'DEVELOPMENT', 'TEST', 'PRODUCTION') %}<option{% if database.environment == environment %} selected{% endif %}>{{ environment }}</option>{% endfor %}</select></label>
                 <label>SSL mode<select name="sslmode"><option{% if database.sslmode == 'require' %} selected{% endif %}>require</option><option{% if database.sslmode == 'verify-ca' %} selected{% endif %}>verify-ca</option><option{% if database.sslmode == 'verify-full' %} selected{% endif %}>verify-full</option><option{% if database.sslmode == 'prefer' %} selected{% endif %}>prefer</option><option{% if database.sslmode == 'disable' %} selected{% endif %}>disable</option></select></label>
                 <button class="btn btn-secondary" type="submit">Test and update</button>
+                <button class="btn btn-secondary" type="submit" formmethod="post" formaction="{{ url_for('admin_database_delete', database_id=database.id) }}" formnovalidate onclick="return confirm('Remove this saved connection? The database itself will not be deleted.')">Remove saved connection</button>
               </form></td></tr>
             {% else %}
               <tr><td colspan="7" class="empty-state">No saved database connections.</td></tr>

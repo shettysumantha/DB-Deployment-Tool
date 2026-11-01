@@ -1,8 +1,10 @@
 import getpass
 import os
+import threading
 from contextlib import contextmanager
 
 import psycopg2
+from cryptography.fernet import Fernet, InvalidToken
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from core.config.config import APP_DATABASE_URL
@@ -93,9 +95,14 @@ CREATE TABLE IF NOT EXISTS tbl_database_credentials (
 ALTER TABLE tbl_database_credentials
     ADD COLUMN IF NOT EXISTS environment VARCHAR(20)
     NOT NULL DEFAULT 'DEVELOPMENT';
+
+ALTER TABLE tbl_database_credentials
+    ADD COLUMN IF NOT EXISTS password_ciphertext TEXT;
 """
 
 ENVIRONMENTS = {"LOCAL", "DEVELOPMENT", "TEST", "PRODUCTION"}
+_schema_initialized = False
+_schema_lock = threading.Lock()
 
 
 def _clean_environment(value):
@@ -105,12 +112,40 @@ def _clean_environment(value):
     return environment
 
 
+def _password_cipher():
+    key = os.getenv("DATABASE_CREDENTIALS_ENCRYPTION_KEY", "").strip()
+    if not key:
+        raise RuntimeError(
+            "DATABASE_CREDENTIALS_ENCRYPTION_KEY must be configured before saving or reusing database passwords."
+        )
+    try:
+        return Fernet(key.encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise RuntimeError(
+            "DATABASE_CREDENTIALS_ENCRYPTION_KEY must be a valid Fernet key."
+        ) from exc
+
+
+def _encrypt_password(password):
+    return _password_cipher().encrypt(str(password).encode("utf-8")).decode("ascii")
+
+
+def _decrypt_password(ciphertext):
+    try:
+        return _password_cipher().decrypt(str(ciphertext).encode("ascii")).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError(
+            "A saved database password could not be decrypted. Verify the configured encryption key."
+        ) from exc
+
+
 # ==========================================================
 # APPLICATION DATABASE CONNECTION
 # ==========================================================
 
 @contextmanager
 def store():
+    global _schema_initialized
 
     _validate_database_url()
 
@@ -124,15 +159,13 @@ def store():
 
         database.autocommit = False
 
-        with database.cursor(
-            cursor_factory=RealDictCursor
-        ) as cursor:
-
-            cursor.execute(
-                DDL
-            )
-
-        database.commit()
+        if not _schema_initialized:
+            with _schema_lock:
+                if not _schema_initialized:
+                    with database.cursor(cursor_factory=RealDictCursor) as cursor:
+                        cursor.execute(DDL)
+                    database.commit()
+                    _schema_initialized = True
 
         yield database
 
@@ -284,20 +317,61 @@ def get_database(database_id):
     )
 
 
+def get_database_password(database_id):
+    try:
+        database_id = int(database_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Database selection is invalid.") from exc
+
+    with store() as database:
+        with database.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """SELECT password_ciphertext
+                   FROM tbl_database_credentials
+                   WHERE id = %s AND is_active = TRUE""",
+                (database_id,),
+            )
+            row = cursor.fetchone()
+
+    if not row or not row["password_ciphertext"]:
+        return None
+    return _decrypt_password(row["password_ciphertext"])
+
+
+def delete_database(database_id):
+    try:
+        database_id = int(database_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Database selection is invalid.") from exc
+
+    with store() as database:
+        with database.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """DELETE FROM tbl_database_credentials
+                   WHERE id = %s
+                   RETURNING id""",
+                (database_id,),
+            )
+            deleted = cursor.fetchone()
+        if not deleted:
+            raise ValueError("The selected saved connection was not found.")
+        database.commit()
+
+
 # ==========================================================
 # BUILD CONNECTION CONFIGURATION
 # ==========================================================
 
 def connection_config(
     record,
-    password
+    password=None,
 ):
 
-    password = str(
-        password or ""
-    )
+    password = str(password or "")
+    if not password and record.get("id"):
+        password = get_database_password(record["id"]) or ""
 
-    if not password:
+    if not password and not record.get("id"):
 
         raise ValueError(
             "Password is required for "
@@ -420,10 +494,12 @@ def save_database(
                         username,
                         environment,
                         sslmode,
+                        password_ciphertext,
                         created_by
                     )
                     VALUES
                     (
+                        %s,
                         %s,
                         %s,
                         %s,
@@ -443,6 +519,7 @@ def save_database(
                         config["username"],
                         environment,
                         sslmode,
+                        _encrypt_password(config["password"]),
                         created_by,
                     )
                 )
@@ -551,6 +628,7 @@ def update_database(
                         username = %s,
                         environment = COALESCE(%s, environment),
                         sslmode = %s,
+                        password_ciphertext = %s,
                         updated_by = %s,
                         updated_date =
                             CURRENT_TIMESTAMP
@@ -566,6 +644,7 @@ def update_database(
                         config["username"],
                         environment,
                         sslmode,
+                        _encrypt_password(config["password"]),
                         editor,
                         database_id,
                     )

@@ -85,6 +85,17 @@ body[data-can-deploy="false"] #deployBtnBottom { display: none; }
 .dashboard-topbar .brand h1 { font-size: 16px; }
 .dashboard-content .app-header { padding-top: 26px; }
 .dashboard-content .app-header h1 { font-size: 28px; }
+.dashboard-health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px; padding: 8px 32px; }
+.dashboard-health-card { display: flex; flex-direction: column; gap: 7px; min-height: 112px; padding: 17px; background: #182732; color: #fff; border-top: 2px solid var(--cyan); }
+.dashboard-health-card strong { font-size: 21px; overflow-wrap: anywhere; }
+.dashboard-health-card small, .dashboard-metrics-note { color: #687277; font-size: 12px; }
+.dashboard-metrics-note { margin: 8px 32px 18px; }
+.dashboard-performance-panel { margin: 0 32px 24px; padding: 18px; background: rgba(24,39,50,.06); border: 1px solid #c9c8c0; }
+.dashboard-performance-panel h2 { margin: 0 0 14px; font-size: 17px; }
+.dashboard-performance-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.dashboard-performance-list li { display: flex; justify-content: space-between; gap: 14px; padding: 9px 11px; background: #fff; color: #182732; font-size: 12px; }
+.dashboard-performance-list code { overflow-wrap: anywhere; color: #156a62; }
+.dashboard-performance-panel .dashboard-metrics-note { margin: 14px 0 0; }
 .menu-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 28px; padding: 22px; background: #182732; color: #fff; }
 .menu-form label { font: 11px "DM Mono", monospace; text-transform: uppercase; }
 .menu-form .check { display: flex; align-items: center; gap: 8px; padding-top: 30px; }
@@ -159,7 +170,7 @@ body[data-can-deploy="false"] #deployBtnBottom { display: none; }
 .permission-form td:not(:first-child), .permission-form th:not(:first-child) { text-align: center; }
 .permission-form td input { display: inline-block; }
 @media (max-width: 800px) { .admin-content { padding: 20px 18px 34px; } .admin-page-heading h1 { font-size: 22px; } .admin-form { grid-template-columns: 1fr; } .role-edit-row { grid-template-columns: 1fr; min-width: 0; } .user-search-form { align-items: stretch; flex-wrap: wrap; } .user-search-form label { flex-basis: 100%; max-width: none; } .admin-users-table .row-actions { flex-wrap: wrap; white-space: normal; } .user-detail-list { grid-template-columns: 1fr; gap: 3px; } .user-detail-list dd { margin-bottom: 8px; } .profile-summary { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; } .profile-avatar-wrap, .profile-avatar { width: 60px; height: 60px; } .profile-avatar { font-size: 23px; } .profile-actions { grid-column: 1 / -1; justify-content: start; } .profile-dialog .admin-form { grid-template-columns: 1fr; } }
-@media (max-width: 800px) { .sidebar { width: 72px; } .sidebar-brand div, .sidebar-link span:not(.sidebar-icon), .sidebar-user > span, .sidebar-user > small { display: none; } .sidebar-brand { flex-wrap: wrap; justify-content: center; padding-left: 0; padding-right: 0; } .sidebar-brand .sidebar-toggle { margin: 8px auto 0; } .sidebar-link { justify-content: center; padding-left: 8px; padding-right: 8px; } .main-content, .app-page > .topbar { margin-left: 72px; } .menu-form { grid-template-columns: 1fr; } .app-header, .dashboard-grid, .admin-panel { padding-left: 18px; padding-right: 18px; } .brand h1 { font-size: 14px; } .dashboard-topbar .header-user { display: none; } }
+@media (max-width: 800px) { .sidebar { width: 72px; } .sidebar-brand div, .sidebar-link span:not(.sidebar-icon), .sidebar-user > span, .sidebar-user > small { display: none; } .sidebar-brand { flex-wrap: wrap; justify-content: center; padding-left: 0; padding-right: 0; } .sidebar-brand .sidebar-toggle { margin: 8px auto 0; } .sidebar-link { justify-content: center; padding-left: 8px; padding-right: 8px; } .main-content, .app-page > .topbar { margin-left: 72px; } .menu-form { grid-template-columns: 1fr; } .app-header, .dashboard-grid, .dashboard-health-grid, .admin-panel { padding-left: 18px; padding-right: 18px; } .dashboard-metrics-note { margin-left: 18px; margin-right: 18px; } .dashboard-performance-panel { margin-left: 18px; margin-right: 18px; } .dashboard-performance-list li { flex-direction: column; gap: 5px; } .brand h1 { font-size: 14px; } .dashboard-topbar .header-user { display: none; } }
 .connection-summary {
   display: flex;
   align-items: center;

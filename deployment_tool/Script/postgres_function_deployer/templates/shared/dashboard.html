@@ -17,6 +17,19 @@
 	</header>
 	<main class="main-content dashboard-content">
 		<header class="app-header"><div><p class="eyebrow accent">CONTROL PLANE</p><h1>Welcome, {{ session.get('full_name') or session.get('username') }}</h1><p>DBA Operations Platform Overview</p></div></header>
+		<section class="dashboard-health-grid" aria-label="Platform health">
+			<article class="dashboard-health-card"><span class="eyebrow">WEB APPLICATION</span><strong id="webHealth">Loading</strong><small>Current application process</small></article>
+			<article class="dashboard-health-card"><span class="eyebrow">APPLICATION DATABASE</span><strong id="databaseHealth">Checking</strong><small>Security database initialization</small></article>
+			<article class="dashboard-health-card"><span class="eyebrow">REQUESTS · LAST 5 MIN</span><strong id="requestCount">—</strong><small><span id="requestErrors">—</span> server errors</small></article>
+			<article class="dashboard-health-card"><span class="eyebrow">RESPONSE TIME · LAST 5 MIN</span><strong id="requestLatency">—</strong><small>Average / p95 milliseconds</small></article>
+			<article class="dashboard-health-card"><span class="eyebrow">PROCESS UPTIME</span><strong id="processUptime">—</strong><small>Since this worker started</small></article>
+		</section>
+		<p class="dashboard-metrics-note">Performance samples are process-local, limited to the latest 2,000 requests, and reset when a worker restarts. They contain route patterns only, not request payloads.</p>
+		<section class="dashboard-performance-panel">
+			<div><p class="eyebrow accent">PERFORMANCE INSIGHTS</p><h2>Slowest endpoints</h2></div>
+			<ul id="slowEndpoints" class="dashboard-performance-list"><li>Collecting request samples…</li></ul>
+			<p id="performanceAdvice" class="dashboard-metrics-note" aria-live="polite"></p>
+		</section>
 		<section class="dashboard-grid">
 			{% for menu in sidebar_menus %}
 				{% for item in menu.children if menu.children %}
@@ -38,5 +51,6 @@
 				<a class="dashboard-module" href="/profile"><span class="sidebar-icon">◎</span><h2>Profile</h2><p>Manage your account password and security.</p><span class="module-open">Open module <span aria-hidden="true">→</span></span></a>
 		</section>
 	</main>
+	<script src="/static/shared/js/dashboard.js?v=1" defer></script>
 </body>
 </html>

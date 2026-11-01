@@ -30,7 +30,7 @@
         <label>Password<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
         <label>Confirm password<input name="confirm_password" type="password" required minlength="8" autocomplete="new-password"></label>
         <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}">{{ role.role_name }}</option>{% endfor %}</select></label>
-        <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.module_id }}">{{ module.parent_menu_name or 'Unassigned' }} / {{ module.submenu_name or 'No submenu' }} / {{ module.module_name }}{% if not module.is_enabled %} (disabled){% endif %}</label>{% else %}<p class="empty-state">No registered modules available.</p>{% endfor %}</div></fieldset>
+        <fieldset class="module-access-field"><legend>Module Access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.module_id }}">{{ module.module_name }}{% if not module.is_enabled %} (disabled){% endif %}</label>{% else %}<p class="empty-state">No registered modules available.</p>{% endfor %}</div></fieldset>
         <button class="btn btn-primary" type="submit">Create user</button>
       </form>
     </section>
@@ -94,7 +94,7 @@
         <label>Email<input name="email" type="email" maxlength="255"></label>
         <label>Role<select name="role_id" required>{% for role in roles if role.is_active %}<option value="{{ role.role_id }}">{{ role.role_name }}</option>{% endfor %}</select></label>
         <label class="user-status-field"><input name="is_active" type="checkbox"><span>Active</span></label>
-        <fieldset class="module-access-field"><legend>Module access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.module_id }}">{{ module.parent_menu_name or 'Unassigned' }} / {{ module.submenu_name or 'No submenu' }} / {{ module.module_name }}{% if not module.is_enabled %} (disabled){% endif %}</label>{% else %}<p class="empty-state">No registered modules available.</p>{% endfor %}</div></fieldset>
+        <fieldset class="module-access-field"><legend>Module access</legend><div class="module-access-grid">{% for module in modules %}<label><input type="checkbox" name="module_ids" value="{{ module.module_id }}">{{ module.module_name }}{% if not module.is_enabled %} (disabled){% endif %}</label>{% else %}<p class="empty-state">No registered modules available.</p>{% endfor %}</div></fieldset>
         <div class="user-dialog-actions"><button class="btn btn-primary" type="submit">Save changes</button><button class="btn btn-outline-secondary" type="button" data-close-edit>Cancel</button></div>
       </form>
     </dialog>

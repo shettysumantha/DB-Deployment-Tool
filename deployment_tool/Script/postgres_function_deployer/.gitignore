@@ -1,5 +1,7 @@
 .env
 instance/profile_avatars/
+instance/demo-postgres/
+instance/demo-postgres.log
 credentials.json
 token.json
 .venv/
