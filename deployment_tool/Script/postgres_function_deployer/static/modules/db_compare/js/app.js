@@ -128,11 +128,6 @@ function setCredentialMode(form, record, editing = false) {
   const fields = form.querySelector(".database-fields");
   const summary = form.querySelector(".connection-summary");
   form.dataset.record = record?.id || "";
-  form.dataset.alias = record?.databaseAlias || "";
-  const alias = form.querySelector("[name=database_alias]");
-  alias.value = record?.databaseAlias || "";
-  alias.readOnly = existing && !editing;
-  alias.required = !existing || editing;
   ["host", "port", "database", "username"].forEach((name) => {
     const field = form.querySelector(`[name=${name}]`);
     if (record && !editing)
@@ -144,7 +139,9 @@ function setCredentialMode(form, record, editing = false) {
     field.required = true;
   });
   form.querySelector("[name=password]").value = "";
-  summary.querySelector("strong").textContent = record?.databaseAlias || "";
+  summary.querySelector("strong").textContent = record
+    ? `${record.host} → ${record.databaseName}`
+    : "";
   fields.classList.remove("d-none");
   summary.classList.add("d-none");
   form
@@ -182,7 +179,7 @@ async function loadDatabases() {
         data.databases
           .map(
             (item) =>
-              `<option value="${item.id}">${escapeHtml(item.databaseAlias)}</option>`,
+              `<option value="${item.id}">${escapeHtml(`${item.host} → ${item.databaseName}`)}</option>`,
           )
           .join("");
       select.addEventListener("change", async () => {
@@ -535,7 +532,6 @@ async function loadHistory() {
       form,
       {
         id: form.dataset.record,
-        databaseAlias: form.dataset.alias,
         host: form.querySelector("[name=host]").value,
         port: form.querySelector("[name=port]").value,
         databaseName: form.querySelector("[name=database]").value,

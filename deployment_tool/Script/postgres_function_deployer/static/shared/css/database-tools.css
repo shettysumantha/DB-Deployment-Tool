@@ -1,0 +1,68 @@
+.database-tools {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.database-tools .admin-page-heading,
+.database-tools .admin-section-heading,
+.database-tools-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.health-facts {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin: 1rem 0;
+}
+
+.health-fact {
+  background: var(--surface-muted, #f3f5f8);
+  border: 1px solid var(--border, #dce1e8);
+  border-radius: 0.6rem;
+  padding: 0.85rem;
+}
+
+.health-fact dt {
+  color: var(--text-muted, #5f6b7a);
+  font-size: 0.8rem;
+}
+
+.health-fact dd {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0.35rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.database-tools-warning {
+  border-left: 4px solid #c78615;
+  padding-left: 0.75rem;
+}
+
+#databaseSql {
+  display: block;
+  font-family: Consolas, "Courier New", monospace;
+  margin: 0.5rem 0 1rem;
+  max-width: 100%;
+  min-height: 10rem;
+  width: 100%;
+}
+
+.database-tools .table-wrap {
+  margin-top: 1rem;
+}
+
+.database-tools .sr-only {
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}

@@ -18,6 +18,7 @@
   <main class="main-content admin-content">
     <header class="admin-page-heading"><div><p class="eyebrow accent">CONFIGURATION</p><h1>Module Management</h1></div></header>
     <p id="moduleNotice" class="notice d-none" role="status"></p>
+    {% if not endpoint_catalog_available %}<p class="notice error" role="alert">The endpoint catalog is not installed. Apply <code>database/migrations/20261101_module_endpoint_catalog.sql</code> to the application database before using module endpoint registration.</p>{% endif %}
     <section class="admin-section">
       <h2>Register external module</h2>
       <form id="moduleRegisterForm" class="admin-form">
@@ -25,6 +26,8 @@
         <label>API Base URL (Optional)<input name="api_base_url" type="url" placeholder="https://module.example.com/api"></label>
         <label>Manifest URL (Optional)<input name="manifest_url" type="url" placeholder="https://module.example.com/api/module-manifest"></label>
         <label>Health URL (Optional)<input name="health_url" type="url" placeholder="https://module.example.com/api/health"></label>
+        <label>Endpoint name (Optional)<input name="endpoint_name" maxlength="150" placeholder="Database Health API"></label>
+        <label>Endpoint path (Optional)<input name="endpoint_path" maxlength="500" placeholder="/api/database-health"></label>
         <label>Parent menu<select name="parent_menu_id" required>{% for parent in parents %}<option value="{{ parent.menu_id }}">{% if parent.parent_menu_name %}{{ parent.parent_menu_name }} / {% endif %}{{ parent.menu_name }}</option>{% else %}<option value="" disabled selected>No active parent menus are available</option>{% endfor %}</select></label>
         <label>Display order<input name="display_order" type="number" min="0" value="10"></label>
         <button id="validateModule" class="btn btn-secondary" type="button">Validate module</button>
@@ -67,6 +70,7 @@
                       <label>API Base URL (Optional)<input name="api_base_url" value="{{ module.api_base_url or '' }}"></label>
                       <label>Manifest URL (Optional)<input name="manifest_url" value="{{ module.manifest_url or '' }}"></label>
                       <label>Health URL (Optional)<input name="health_url" value="{{ module.health_url or '' }}"></label>
+                      <label>API endpoint<select name="endpoint_id" data-endpoint-selector data-selected-endpoint="{{ module_endpoint_assignments.get(module.module_id, '') }}"><option value="">No endpoint assigned</option></select></label>
                       <label>Entry path<input name="entry_path" value="{{ module.entry_path }}" required></label>
                       <label>Icon<input name="icon" value="{{ module.icon }}" required></label>
                       <label>Parent menu<select name="parent_menu_id" required>{% if not (parents|selectattr('menu_id', 'equalto', module.parent_menu_id)|list) %}<option value="{{ module.parent_menu_id }}" selected>{{ module.parent_menu_name }} (legacy parent)</option>{% endif %}{% for parent in parents %}<option value="{{ parent.menu_id }}"{% if parent.menu_id == module.parent_menu_id %} selected{% endif %}>{% if parent.parent_menu_name %}{{ parent.parent_menu_name }} / {% endif %}{{ parent.menu_name }}</option>{% else %}{% if parents|length == 0 %}<option value="" disabled>No active parent menus are available</option>{% endif %}{% endfor %}</select></label>
@@ -128,6 +132,27 @@
       }
       return data;
     };
+    async function loadEndpointCatalog() {
+      try {
+        const result = await send('/api/admin/module-endpoints', 'GET');
+        document.querySelectorAll('[data-endpoint-selector]').forEach(select => {
+          const selected = select.dataset.selectedEndpoint;
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = 'No endpoint assigned';
+          select.replaceChildren(placeholder);
+          result.endpoints.forEach(endpoint => {
+            const option = document.createElement('option');
+            option.value = endpoint.endpoint_id;
+            option.textContent = `${endpoint.endpoint_name} (${endpoint.endpoint_path})`;
+            select.append(option);
+          });
+          select.value = selected;
+        });
+      } catch (error) {
+        showNotice(error.message, true);
+      }
+    }
     const registerForm = document.getElementById('moduleRegisterForm');
     const registerButton = document.getElementById('registerModule');
     const endpointPayload = () => ({
@@ -135,6 +160,8 @@
       api_base_url: registerForm.elements.api_base_url.value.trim(),
       manifest_url: registerForm.elements.manifest_url.value.trim(),
       health_url: registerForm.elements.health_url.value.trim(),
+      endpoint_name: registerForm.elements.endpoint_name.value.trim(),
+      endpoint_path: registerForm.elements.endpoint_path.value.trim(),
     });
     let validatedEndpoints = '';
     document.getElementById('validateModule').addEventListener('click', async () => {
@@ -172,6 +199,7 @@
             message: result.message,
             moduleId: result.module.module_id,
           }));
+          loadEndpointCatalog();
         }
         location.reload();
       } catch (error) { showNotice(error.message, true); }

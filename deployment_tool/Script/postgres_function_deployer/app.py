@@ -18,9 +18,10 @@ from psycopg2.errors import CheckViolation, UniqueViolation
 from core.config.config import ADMIN_BOOTSTRAP_PASSKEY, DEBUG, EXPECTED_FUNCTIONS, EXPECTED_TABLES, HOST, PG_DEFAULTS, PG_PASSWORD, PORT, SECRET_KEY, SESSION_TIMEOUT_MINUTES, TABLE_NAME_PATTERN
 from core.ai_assistant.ollama_service import AssistantError, UnsafePromptError, assistant_enabled, configured_model, generate_answer
 from core.database.db_service import clean_config, safe_error, test_connection
-from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_available_modules, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
+from core.module_registry.module_service import ModuleCodeConflictError, check_module_health, deregister_module, get_launch_target, get_module_by_code, list_api_endpoints, list_available_modules, list_module_api_endpoint_assignments, list_module_permissions, list_modules as registered_modules, list_parent_menus, module_permission, register_module, save_module_permissions, set_module_enabled, update_module, validate_module_registration
 from core.security.security_service import UserNotFoundError, admin_exists, audit_event, authenticate, change_password, complete_password_reset, create_bootstrap_admin, create_user, delete_menu, get_profile, get_user_management_detail, get_user_management_edit_data, has_permission, initialize_security, list_menus, list_modules, list_role_permissions, list_roles, list_user_management_data, list_user_management_page, list_users, logout, record_failed_login, request_password_reset, save_menu, save_permissions, save_role, update_profile, update_user, user_has_role, user_menus, user_roles, user_session_state
 from modules.database_management.credential_service import connection_config, delete_database, get_database, get_database_password, list_databases, save_database, update_database
+from modules.database_management.operations_service import execute_read_query, inspect_database, vacuum_analyze
 from modules.db_compare.services.backup_service import create_backup, safe_backup_path
 from modules.db_compare.services.comparison_service import compare_functions
 from modules.db_compare.services.deployment_service import deploy_records
@@ -963,7 +964,79 @@ def admin_role_update_form(role_id):
 @app.get("/admin/databases")
 def admin_databases():
     require_permission("DATABASE_MANAGEMENT")
-    return render_template("database_management/admin_databases.html", databases=list_databases(), defaults=PG_DEFAULTS)
+    return render_template("database_management/admin_databases.html", databases=list_databases())
+
+
+def _require_database_tool_permission():
+    require_any_permission(
+        "DATABASE_MANAGEMENT", "DEPLOYMENT_MANAGER", "COMPARISON_RESULTS",
+        permission="can_execute",
+    )
+
+
+@app.get("/database-tools")
+def database_tools_page():
+    _require_database_tool_permission()
+    return render_template("database_management/database_tools.html")
+
+
+@app.get("/api/database-health")
+def database_health_api():
+    _require_database_tool_permission()
+    record = _active_database_record()
+    if not record:
+        return jsonify({"error": "Select an active database connection first."}), 409
+    try:
+        config = _payload_config({"database_id": record["id"]})
+        return jsonify({
+            "connection": {
+                "id": record["id"],
+                "host": record["host"],
+                "port": record["port"],
+                "databaseName": record["databaseName"],
+                "environment": record["environment"],
+            },
+            **inspect_database(config),
+        })
+    except Exception as exc:
+        app.logger.exception("Database health inspection failed for connection %s", record["id"])
+        return jsonify({"error": safe_error(exc)}), 503
+
+
+@app.post("/api/database-query")
+def database_query_api():
+    _require_database_tool_permission()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    record = _active_database_record()
+    if not record:
+        return jsonify({"error": "Select an active database connection first."}), 409
+    operation = payload.get("operation", "query")
+    try:
+        config = _payload_config({"database_id": record["id"]})
+        if operation == "query":
+            result = execute_read_query(config, payload.get("sql"))
+        elif operation == "vacuum_analyze":
+            if payload.get("confirm_vacuum") is not True:
+                return jsonify({"error": "Confirm the VACUUM ANALYZE operation before running it."}), 400
+            result = vacuum_analyze(config, payload.get("sql"))
+            app.logger.info(
+                "VACUUM ANALYZE requested by user %s for saved database connection %s",
+                session.get("user_id"),
+                record["id"],
+            )
+        else:
+            return jsonify({"error": "Unsupported database operation."}), 400
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        app.logger.exception(
+            "Database operation failed for saved connection %s",
+            record["id"],
+        )
+        return jsonify({"error": safe_error(exc)}), 400
 
 
 @app.post("/admin/databases/create")
@@ -1017,6 +1090,119 @@ def admin_database_delete(database_id):
     return redirect(url_for("admin_databases"))
 
 
+@app.post("/api/admin/database-connections")
+def admin_database_connection_create_api():
+    require_permission("DATABASE_MANAGEMENT", "can_create")
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    try:
+        config = _payload_config(payload)
+        details = test_connection(config)
+        record = save_database(None, config, payload.get("environment"))
+        return jsonify({"database": record, "connection": details}), 201
+    except RuntimeError as exc:
+        app.logger.error("Database credential encryption configuration failed: %s", exc)
+        return jsonify({"error": str(exc)}), 503
+    except Exception as exc:
+        return jsonify({"error": safe_error(exc, payload.get("password", ""))}), 400
+
+
+@app.put("/api/admin/database-connections/<int:database_id>")
+def admin_database_connection_update_api(database_id):
+    require_permission("DATABASE_MANAGEMENT", "can_edit")
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    try:
+        config = _payload_config(payload, saved_database_id=database_id)
+        details = test_connection(config)
+        record = update_database(
+            database_id, None, config, payload.get("environment")
+        )
+        return jsonify({"database": record, "connection": details})
+    except RuntimeError as exc:
+        app.logger.error("Database credential encryption configuration failed: %s", exc)
+        return jsonify({"error": str(exc)}), 503
+    except Exception as exc:
+        return jsonify({"error": safe_error(exc, payload.get("password", ""))}), 400
+
+
+@app.delete("/api/admin/database-connections/<int:database_id>")
+def admin_database_connection_delete_api(database_id):
+    require_permission("DATABASE_MANAGEMENT", "can_delete")
+    try:
+        delete_database(database_id)
+        if session.get("active_database_id") == database_id:
+            _clear_active_database_context()
+        return jsonify({"success": True})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        app.logger.exception("Database connection removal failed")
+        return jsonify({"error": "Unable to remove the saved database connection."}), 500
+
+
+def _clear_active_database_context():
+    session.pop("active_database_id", None)
+    sid = session.get("sid")
+    if sid:
+        state = vault.get(sid)
+        if state:
+            state.pop("active_database", None)
+            state.pop("database_health", None)
+
+
+def _active_database_record():
+    database_id = session.get("active_database_id")
+    if not database_id:
+        return None
+    try:
+        return get_database(database_id)
+    except ValueError:
+        _clear_active_database_context()
+        return None
+
+
+@app.get("/api/active-database")
+def active_database_api():
+    require_any_permission(
+        "DATABASE_MANAGEMENT", "DEPLOYMENT_MANAGER", "COMPARISON_RESULTS",
+        permission="can_execute",
+    )
+    return jsonify({
+        "connections": list_databases(),
+        "active_connection": _active_database_record(),
+    })
+
+
+@app.put("/api/active-database")
+def set_active_database_api():
+    require_any_permission(
+        "DATABASE_MANAGEMENT", "DEPLOYMENT_MANAGER", "COMPARISON_RESULTS",
+        permission="can_execute",
+    )
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    database_id = payload.get("database_id")
+    _clear_active_database_context()
+    if database_id in (None, ""):
+        return jsonify({"active_connection": None})
+    try:
+        record = get_database(database_id)
+        config = _payload_config({"database_id": database_id})
+        details = test_connection(config)
+    except Exception as exc:
+        return jsonify({
+            "error": safe_error(exc, payload.get("password", "")),
+            "active_connection": None,
+        }), 400
+    session["active_database_id"] = record["id"]
+    session.permanent = True
+    return jsonify({"active_connection": record, "connection": details})
+
+
 @app.get("/admin/permissions")
 def admin_permissions():
     require_permission("ROLE_PERMISSIONS")
@@ -1048,9 +1234,18 @@ def admin_modules():
         module["module_id"]: list_module_permissions(module["module_id"])
         for module in modules
     }
+    try:
+        module_endpoint_assignments = list_module_api_endpoint_assignments()
+        endpoint_catalog_available = True
+    except psycopg2.errors.UndefinedTable:
+        app.logger.exception("Module endpoint catalog migration has not been applied")
+        module_endpoint_assignments = {}
+        endpoint_catalog_available = False
     return render_template(
         "module_management/admin_modules.html", modules=modules, permissions=permissions,
         parents=list_parent_menus(), roles=list_roles(),
+        module_endpoint_assignments=module_endpoint_assignments,
+        endpoint_catalog_available=endpoint_catalog_available,
     )
 
 
@@ -1062,6 +1257,16 @@ def admin_modules_api():
     modules = registered_modules(page_size + 1, (page - 1) * page_size, include_inactive=True)
     has_next = len(modules) > page_size
     return jsonify({"modules": modules[:page_size], "page": page, "page_size": page_size, "has_next": has_next})
+
+
+@app.get("/api/admin/module-endpoints")
+def admin_module_endpoints_api():
+    require_permission("MODULE_MANAGEMENT")
+    try:
+        return jsonify({"endpoints": list_api_endpoints()})
+    except psycopg2.Error:
+        app.logger.exception("Module endpoint catalog could not be loaded")
+        return jsonify({"error": "The endpoint catalog is unavailable. Run the module endpoint migration."}), 503
 
 
 @app.get("/api/modules/available")
@@ -1111,6 +1316,12 @@ def register_module_api():
         return jsonify({"module": module, "is_enabled": False}), 201
     except ModuleCodeConflictError as exc:
         return jsonify({"error": str(exc), "code": "MODULE_CODE_CONFLICT"}), 409
+    except psycopg2.errors.UndefinedTable:
+        app.logger.exception("Module endpoint catalog migration is missing")
+        return jsonify({
+            "error": "Apply database/migrations/20261101_module_endpoint_catalog.sql before registering an API endpoint.",
+            "code": "MODULE_ENDPOINT_CATALOG_MISSING",
+        }), 503
     except CheckViolation:
         app.logger.exception("Module registry schema rejected an external module registration")
         return jsonify({
@@ -1132,6 +1343,12 @@ def update_module_api(module_id):
         return jsonify({"module": module})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    except psycopg2.errors.UndefinedTable:
+        app.logger.exception("Module endpoint catalog migration is missing")
+        return jsonify({
+            "error": "Apply database/migrations/20261101_module_endpoint_catalog.sql before changing API endpoint assignments.",
+            "code": "MODULE_ENDPOINT_CATALOG_MISSING",
+        }), 503
 
 
 @app.post("/api/admin/modules/<int:module_id>/health-check")

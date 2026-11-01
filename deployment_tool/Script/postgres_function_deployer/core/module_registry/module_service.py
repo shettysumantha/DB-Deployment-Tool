@@ -113,6 +113,21 @@ def _validate_internal_path(value, field_name, allow_empty=False):
     return path
 
 
+def _validate_api_endpoint(payload):
+    endpoint_name = str(payload.get("endpoint_name") or "").strip()
+    endpoint_path = str(payload.get("endpoint_path") or "").strip()
+    if not endpoint_name and not endpoint_path:
+        return None
+    if not endpoint_name or len(endpoint_name) > 150:
+        raise ValueError("Endpoint name is required and must be 150 characters or fewer.")
+    if not endpoint_path:
+        raise ValueError("Endpoint path is required when an endpoint name is provided.")
+    endpoint_path = _validate_internal_path(endpoint_path, "Endpoint path")
+    if not endpoint_path.startswith("/api/"):
+        raise ValueError("Endpoint path must start with /api/.")
+    return {"endpoint_name": endpoint_name, "endpoint_path": endpoint_path}
+
+
 def _normalized_external_url(value):
     parsed = urlsplit(str(value or "").strip())
     host = (parsed.hostname or "").lower().rstrip(".")
@@ -175,6 +190,7 @@ def validate_module_registration(payload):
     api_base_url = str(payload.get("api_base_url", "")).strip()
     manifest_url = str(payload.get("manifest_url", "")).strip()
     health_url = str(payload.get("health_url", "")).strip()
+    endpoint = _validate_api_endpoint(payload)
     if not any((web_url, api_base_url, manifest_url)):
         raise ValueError("A web URL or API endpoint is required.")
 
@@ -243,6 +259,8 @@ def validate_module_registration(payload):
         "capabilities": capabilities,
         "health_status": "UP" if health else "UNKNOWN",
         "validation_mode": "api-enabled" if api_base_url or manifest_url or health_url else "web-only",
+        "endpoint_name": endpoint["endpoint_name"] if endpoint else None,
+        "endpoint_path": endpoint["endpoint_path"] if endpoint else None,
     }
 
 
@@ -323,6 +341,44 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
                 if not module_row:
                     raise ValueError("The existing module could not be updated. Please retry.")
             module = dict(module_row)
+            endpoint = _validate_api_endpoint(manifest)
+            if endpoint:
+                cur.execute(
+                    """INSERT INTO app_security.api_endpoints
+                        (endpoint_name, endpoint_path, created_by)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (endpoint_path) DO NOTHING
+                       RETURNING endpoint_id, endpoint_name, endpoint_path""",
+                    (
+                        endpoint["endpoint_name"],
+                        endpoint["endpoint_path"],
+                        actor_id,
+                    ),
+                )
+                endpoint_row = cur.fetchone()
+                if not endpoint_row:
+                    cur.execute(
+                        """SELECT endpoint_id, endpoint_name, endpoint_path
+                           FROM app_security.api_endpoints
+                           WHERE endpoint_path = %s AND is_active
+                           FOR UPDATE""",
+                        (endpoint["endpoint_path"],),
+                    )
+                    endpoint_row = cur.fetchone()
+                    if not endpoint_row:
+                        raise ValueError("The endpoint catalog changed during registration. Please retry.")
+                    if endpoint_row["endpoint_name"] != endpoint["endpoint_name"]:
+                        raise ValueError("This endpoint path is already registered with a different name.")
+                cur.execute(
+                    """INSERT INTO app_security.module_api_endpoints
+                        (module_id, endpoint_id, assigned_by)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (module_id) DO UPDATE
+                         SET endpoint_id = EXCLUDED.endpoint_id,
+                             assigned_by = EXCLUDED.assigned_by,
+                             assigned_at = CURRENT_TIMESTAMP""",
+                    (module["module_id"], endpoint_row["endpoint_id"], actor_id),
+                )
             cur.execute(
                 """INSERT INTO app_security.role_module_permissions
                     (role_id, module_id, can_view, can_create, can_edit, can_delete, can_execute)
@@ -342,6 +398,34 @@ def register_module(manifest, actor_id, parent_menu_id, display_order=0):
         conn.commit()
     module["registration_reused"] = registration_reused
     return module
+
+
+def list_api_endpoints():
+    with security_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """SELECT endpoint_id, endpoint_name, endpoint_path
+                   FROM app_security.api_endpoints
+                   WHERE is_active
+                   ORDER BY LOWER(endpoint_name), endpoint_path"""
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def list_module_api_endpoint_assignments():
+    with security_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """SELECT assignment.module_id, assignment.endpoint_id
+                   FROM app_security.module_api_endpoints AS assignment
+                   JOIN app_security.api_endpoints AS endpoint
+                     ON endpoint.endpoint_id = assignment.endpoint_id
+                   WHERE endpoint.is_active"""
+            )
+            return {
+                row["module_id"]: row["endpoint_id"]
+                for row in cur.fetchall()
+            }
 
 
 def list_modules(limit=100, offset=0, include_inactive=False):
@@ -582,6 +666,42 @@ def update_module(module_id, payload, actor_id):
             module = cur.fetchone()
             if not module:
                 raise ValueError("Module was not found or has been de-registered.")
+            endpoint_id = payload.get("endpoint_id")
+            cur.execute(
+                "SELECT to_regclass('app_security.module_api_endpoints') AS relation"
+            )
+            endpoint_mapping_available = cur.fetchone()["relation"] is not None
+            if not endpoint_mapping_available and endpoint_id not in (None, ""):
+                raise ValueError(
+                    "Apply the module endpoint catalog migration before assigning an API endpoint."
+                )
+            if endpoint_mapping_available and endpoint_id in (None, ""):
+                cur.execute(
+                    "DELETE FROM app_security.module_api_endpoints WHERE module_id = %s",
+                    (module_id,),
+                )
+            elif endpoint_mapping_available:
+                try:
+                    endpoint_id = int(endpoint_id)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Choose a valid API endpoint.") from exc
+                cur.execute(
+                    """SELECT 1 FROM app_security.api_endpoints
+                       WHERE endpoint_id = %s AND is_active""",
+                    (endpoint_id,),
+                )
+                if not cur.fetchone():
+                    raise ValueError("The selected API endpoint is not available.")
+                cur.execute(
+                    """INSERT INTO app_security.module_api_endpoints
+                        (module_id, endpoint_id, assigned_by)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (module_id) DO UPDATE
+                         SET endpoint_id = EXCLUDED.endpoint_id,
+                             assigned_by = EXCLUDED.assigned_by,
+                             assigned_at = CURRENT_TIMESTAMP""",
+                    (module_id, endpoint_id, actor_id),
+                )
             cur.execute(
                 """INSERT INTO app_security.audit_logs (user_id, action, details)
                    VALUES (%s, 'MODULE_UPDATED', %s)""",

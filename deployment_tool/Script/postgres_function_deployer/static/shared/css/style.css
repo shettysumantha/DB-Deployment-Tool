@@ -29,6 +29,13 @@
 .sidebar-user form { margin: 0; }
 .sidebar-user span, .sidebar-user small { display: block; }
 .sidebar-user small { color: #9db4c7; font: 10px "DM Mono", monospace; margin: 4px 0 10px; }
+.sidebar-active-connection { padding: 14px 12px; color: #d8e3e1; }
+.sidebar-active-connection label { margin-bottom: 5px; color: #9db4c7; font: 10px "DM Mono", monospace; text-transform: uppercase; }
+.sidebar-active-connection select { width: 100%; padding: 8px; border: 1px solid #40515b; background: #101a20; color: #fff; font-size: 11px; }
+.sidebar-active-connection small { display: block; margin-top: 6px; color: #9db4c7; font-size: 10px; overflow-wrap: anywhere; }
+.sidebar-active-tools { color: var(--cyan, #72e0d2); display: inline-block; font-size: 11px; margin-top: 8px; text-decoration: none; }
+.sidebar-active-tools:hover { text-decoration: underline; }
+.sidebar-collapsed .sidebar-active-connection { display: none; }
 .sidebar-user button { padding: 0; color: var(--cyan, #72e0d2); background: none; border: 0; font: 11px "DM Mono", monospace; text-transform: uppercase; }
 .main-content { margin-left: 252px; min-height: 100vh; transition: margin-left .2s ease; }
 .app-page > .main-content { width: auto; max-width: none; margin-right: 0; }

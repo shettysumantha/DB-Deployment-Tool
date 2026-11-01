@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Database Tools | DBA Operations Platform</title>
+  <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+  <link rel="stylesheet" href="/static/shared/css/database-tools.css?v=1">
+</head>
+<body class="app-page">
+  {% include 'shared/partials_sidebar.html' %}
+  <header class="topbar dashboard-topbar">
+    <div class="page-shell dashboard-topbar-inner">
+      <div class="brand"><span class="brand-mark">PG</span><div><div class="eyebrow">DBA OPERATIONS PLATFORM</div><h1>Database Tools</h1></div></div>
+      <div class="header-user"><strong>{{ session.get('username') }}</strong><span>{{ current_roles|join(' / ') }}</span></div>
+    </div>
+  </header>
+  <main class="main-content database-tools">
+    <header class="admin-page-heading">
+      <div><p class="eyebrow accent">ACTIVE CONNECTION</p><h1>Database health and SQL</h1></div>
+      <a class="btn btn-secondary" href="{{ url_for('admin_databases') }}">Manage connections</a>
+    </header>
+    <p class="notice">All operations use the active saved connection. Query statements run in a read-only transaction with a five-second timeout and a 500-row response cap.</p>
+    <section class="admin-section" aria-labelledby="healthTitle">
+      <div class="admin-section-heading"><h2 id="healthTitle">PostgreSQL health</h2><button id="refreshHealth" class="btn btn-secondary" type="button">Refresh health</button></div>
+      <p id="healthStatus" class="notice" role="status" aria-live="polite">Loading health information…</p>
+      <div id="healthFacts" class="health-facts"></div>
+      <div class="table-wrap admin-table-wrap">
+        <table class="admin-databases-table">
+          <caption class="sr-only">Tables with the highest estimated dead row counts</caption>
+          <thead><tr><th>Schema</th><th>Table</th><th>Estimated rows</th><th>Dead rows</th><th>Last vacuum</th><th>Last analyze</th></tr></thead>
+          <tbody id="healthTables"><tr><td colspan="6" class="empty-state">Health data has not been loaded.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="admin-section" aria-labelledby="queryTitle">
+      <h2 id="queryTitle">Restricted SQL query</h2>
+      <p class="database-tools-warning">Only a single SELECT statement is accepted. Data-changing statements, SELECT INTO, and known side-effect functions are blocked. Results are capped at 500 rows and 100 columns.</p>
+      <label for="databaseSql">SQL query</label>
+      <textarea id="databaseSql" rows="8" maxlength="10000" spellcheck="false" placeholder="SELECT current_database(), current_user;"></textarea>
+      <div class="database-tools-actions">
+        <button id="runReadQuery" class="btn btn-primary" type="button">Run read-only query</button>
+        <button id="runVacuumAnalyze" class="btn btn-secondary" type="button">Run targeted VACUUM ANALYZE</button>
+      </div>
+      <p id="queryStatus" class="notice" role="status" aria-live="polite"></p>
+      <div class="table-wrap admin-table-wrap">
+        <table id="queryResults" class="admin-databases-table">
+          <thead></thead>
+          <tbody><tr><td class="empty-state">Query results will appear here.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/static/shared/js/database-tools.js?v=1" defer></script>
+</body>
+</html>

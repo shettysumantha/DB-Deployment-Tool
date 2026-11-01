@@ -59,7 +59,7 @@ DDL = """
 CREATE TABLE IF NOT EXISTS tbl_database_credentials (
     id BIGSERIAL PRIMARY KEY,
 
-    database_alias VARCHAR(100) NOT NULL,
+    database_alias VARCHAR(100),
 
     host TEXT NOT NULL,
 
@@ -98,6 +98,9 @@ ALTER TABLE tbl_database_credentials
 
 ALTER TABLE tbl_database_credentials
     ADD COLUMN IF NOT EXISTS password_ciphertext TEXT;
+
+ALTER TABLE tbl_database_credentials
+    ALTER COLUMN database_alias DROP NOT NULL;
 """
 
 ENVIRONMENTS = {"LOCAL", "DEVELOPMENT", "TEST", "PRODUCTION"}
@@ -432,20 +435,9 @@ def save_database(
     environment=None,
 ):
 
-    alias = str(
-        alias or ""
-    ).strip()
-
-    if (
-        not alias
-        or len(alias) > 100
-    ):
-
-        raise ValueError(
-            "Database alias is required "
-            "and must be 100 characters "
-            "or fewer."
-        )
+    alias = str(alias or "").strip() or None
+    if alias is not None and len(alias) > 100:
+        raise ValueError("Database alias must be 100 characters or fewer.")
 
     created_by = (
         os.getenv(
@@ -556,20 +548,9 @@ def update_database(
     environment=None,
 ):
 
-    alias = str(
-        alias or ""
-    ).strip()
-
-    if (
-        not alias
-        or len(alias) > 100
-    ):
-
-        raise ValueError(
-            "Database alias is required "
-            "and must be 100 characters "
-            "or fewer."
-        )
+    alias = str(alias or "").strip() or None
+    if alias is not None and len(alias) > 100:
+        raise ValueError("Database alias must be 100 characters or fewer.")
 
     try:
 

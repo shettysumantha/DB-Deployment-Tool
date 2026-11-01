@@ -1,0 +1,9 @@
+.database-connection-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.database-form-actions { display: flex; align-items: end; gap: 8px; }
+.admin-databases-table { min-width: 760px; }
+.admin-databases-table td, .admin-databases-table th { vertical-align: middle; }
+.admin-databases-table .row-actions { white-space: nowrap; }
+@media (max-width: 800px) {
+  .database-connection-form { grid-template-columns: 1fr; }
+  .database-form-actions { align-items: stretch; flex-wrap: wrap; }
+}

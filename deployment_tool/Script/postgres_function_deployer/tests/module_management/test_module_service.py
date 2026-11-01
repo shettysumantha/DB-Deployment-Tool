@@ -207,6 +207,25 @@ class ModuleServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "A web URL or API endpoint is required"):
             module_service.validate_module_registration({})
 
+    def test_api_endpoint_requires_a_valid_label_and_api_path(self):
+        with self.assertRaisesRegex(ValueError, "Endpoint name is required"):
+            module_service._validate_api_endpoint({"endpoint_path": "/api/health"})
+        with self.assertRaisesRegex(ValueError, "must start with /api/"):
+            module_service._validate_api_endpoint({
+                "endpoint_name": "Health API",
+                "endpoint_path": "/health",
+            })
+        self.assertEqual(
+            module_service._validate_api_endpoint({
+                "endpoint_name": "Health API",
+                "endpoint_path": "/api/database-health",
+            }),
+            {
+                "endpoint_name": "Health API",
+                "endpoint_path": "/api/database-health",
+            },
+        )
+
     def test_api_endpoint_html_has_specific_validation_error(self):
         url = "https://module.example/api"
         parsed = urlsplit(url)
@@ -349,7 +368,7 @@ class ModuleServiceTests(unittest.TestCase):
         updated = {**current, "module_name": "New name"}
         connection = MagicMock()
         cursor = connection.__enter__.return_value.cursor.return_value.__enter__.return_value
-        cursor.fetchone.return_value = updated
+        cursor.fetchone.side_effect = [updated, {"relation": None}]
 
         with patch.object(module_service, "get_module", return_value=current), patch.object(
             module_service, "_validate_module_parent",
@@ -373,6 +392,10 @@ class ModuleServiceTests(unittest.TestCase):
         self.assertEqual(update_call.args[1][0], "New name")
         self.assertEqual(result["module_id"], current["module_id"])
         self.assertEqual(result["module_name"], "New name")
+        self.assertFalse(any(
+            "DELETE FROM app_security.module_api_endpoints" in call.args[0]
+            for call in cursor.execute.call_args_list
+        ))
         self.assertFalse(any("INSERT INTO app_security.modules" in call.args[0] for call in cursor.execute.call_args_list))
 
     def test_external_registration_starts_disabled_and_writes_role_grants(self):
@@ -534,6 +557,8 @@ class ModuleServiceTests(unittest.TestCase):
             app_module, "registered_modules", return_value=[],
         ), patch.object(
             app_module, "list_roles", return_value=[],
+        ), patch.object(
+            app_module, "list_module_api_endpoint_assignments", return_value={},
         ), patch.object(
             app_module, "list_menus", return_value=[
                 {

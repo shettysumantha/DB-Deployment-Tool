@@ -6,6 +6,7 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>Database Management | DBA Operations Platform</title>
   <link rel="stylesheet" href="/static/shared/css/style.css?v=enterprise3">
+  <link rel="stylesheet" href="/static/shared/css/database-management.css?v=1">
 </head>
 <body class="app-page">
   {% include 'shared/partials_sidebar.html' %}
@@ -16,54 +17,58 @@
     </div>
   </header>
   <main class="main-content admin-content">
-    <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Database Management</h1></div></header>
-    <p class="notice">Only connections explicitly saved here are listed. The internal application database is not added automatically. Saved passwords are encrypted at rest and never sent back to the browser.</p>
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for category, message in messages %}<div class="notice {{ 'error' if category == 'error' else '' }}">{{ message }}</div>{% endfor %}
-    {% endwith %}
-    <section class="admin-section">
-      <h2>Add connection</h2>
-      <form class="admin-form database-create-form" method="post" action="{{ url_for('admin_database_create') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label>Alias<input name="database_alias" required maxlength="100"></label>
-        <label>Environment<select name="environment"><option>LOCAL</option><option>DEVELOPMENT</option><option>TEST</option><option>PRODUCTION</option></select></label>
-        <label>Host<input name="host" value="{{ defaults.host }}" required></label>
-        <label>Port<input name="port" value="{{ defaults.port }}" required></label>
-        <label>Database<input name="database" value="{{ defaults.database }}" required></label>
-        <label>Username<input name="username" value="{{ defaults.username }}" required></label>
+    <header class="admin-page-heading"><div><p class="eyebrow accent">ADMINISTRATION</p><h1>Database Management</h1></div><a class="btn btn-secondary" href="{{ url_for('database_tools_page') }}">Open database tools</a></header>
+    <p class="notice">Saved passwords are encrypted at rest and never sent back to the browser. Removing a saved connection does not delete its database.</p>
+    <p id="connectionNotice" class="notice d-none" role="status" aria-live="polite"></p>
+    <section class="admin-section" aria-labelledby="connectionFormTitle">
+      <h2 id="connectionFormTitle">Add connection</h2>
+      <form id="databaseConnectionForm" class="admin-form database-connection-form">
+        <input type="hidden" name="database_id">
+        <label>Host<input name="host" required autocomplete="off"></label>
+        <label>Port<input name="port" type="number" min="1" max="65535" value="5432" required></label>
+        <label>Database name<input name="database" required autocomplete="off"></label>
+        <label>Username<input name="username" required autocomplete="username"></label>
         <label>Password<input name="password" type="password" autocomplete="new-password"></label>
         <label>SSL mode<select name="sslmode"><option>require</option><option>verify-ca</option><option>verify-full</option><option>prefer</option><option>disable</option></select></label>
-        <button class="btn btn-primary" type="submit">Test and save</button>
+        <label>Environment<select name="environment"><option>LOCAL</option><option>DEVELOPMENT</option><option>TEST</option><option>PRODUCTION</option></select></label>
+        <div class="database-form-actions">
+          <button id="saveDatabaseConnection" class="btn btn-primary" type="submit">Test and add connection</button>
+          <button id="cancelDatabaseEdit" class="btn btn-secondary d-none" type="button">Cancel edit</button>
+        </div>
       </form>
     </section>
     <section class="admin-section">
-      <div class="admin-section-heading"><h2>Saved connections</h2><span>{{ databases|length }} configurations</span></div>
+      <div class="admin-section-heading"><h2>Saved connections</h2><span>{{ databases|length }} connections</span></div>
       <div class="table-wrap admin-table-wrap">
         <table class="admin-databases-table">
-          <thead><tr><th>Alias</th><th>Host</th><th>Port</th><th>Database</th><th>Username</th><th>Environment</th><th>Update</th></tr></thead>
-          <tbody>
+          <thead><tr><th>Host</th><th>Port</th><th>Database name</th><th>Username</th><th>Environment</th><th>Actions</th></tr></thead>
+          <tbody id="savedDatabaseConnections">
             {% for database in databases %}
-              <tr><td colspan="7"><form class="database-edit-row" method="post" action="{{ url_for('admin_database_update', database_id=database.id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="database_id" value="{{ database.id }}">
-                <label>Alias<input name="database_alias" value="{{ database.databaseAlias }}" required></label>
-                <label>Host<input name="host" value="{{ database.host }}" required></label>
-                <label>Port<input name="port" value="{{ database.port }}" required></label>
-                <label>Database<input name="database" value="{{ database.databaseName }}" required></label>
-                <label>Username<input name="username" value="{{ database.username }}" required></label>
-                <label>New password<input name="password" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved password"></label>
-                <label>Environment<select name="environment">{% for environment in ('LOCAL', 'DEVELOPMENT', 'TEST', 'PRODUCTION') %}<option{% if database.environment == environment %} selected{% endif %}>{{ environment }}</option>{% endfor %}</select></label>
-                <label>SSL mode<select name="sslmode"><option{% if database.sslmode == 'require' %} selected{% endif %}>require</option><option{% if database.sslmode == 'verify-ca' %} selected{% endif %}>verify-ca</option><option{% if database.sslmode == 'verify-full' %} selected{% endif %}>verify-full</option><option{% if database.sslmode == 'prefer' %} selected{% endif %}>prefer</option><option{% if database.sslmode == 'disable' %} selected{% endif %}>disable</option></select></label>
-                <button class="btn btn-secondary" type="submit">Test and update</button>
-                <button class="btn btn-secondary" type="submit" formmethod="post" formaction="{{ url_for('admin_database_delete', database_id=database.id) }}" formnovalidate onclick="return confirm('Remove this saved connection? The database itself will not be deleted.')">Remove saved connection</button>
-              </form></td></tr>
+              <tr data-connection-id="{{ database.id }}"
+                  data-host="{{ database.host }}"
+                  data-port="{{ database.port }}"
+                  data-database="{{ database.databaseName }}"
+                  data-username="{{ database.username }}"
+                  data-sslmode="{{ database.sslmode }}"
+                  data-environment="{{ database.environment }}">
+                <td>{{ database.host }}</td>
+                <td>{{ database.port }}</td>
+                <td>{{ database.databaseName }}</td>
+                <td>{{ database.username }}</td>
+                <td>{{ database.environment }}</td>
+                <td><div class="row-actions">
+                  <button class="btn btn-sm btn-secondary" type="button" data-edit-connection>Edit</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" data-remove-connection>Remove</button>
+                </div></td>
+              </tr>
             {% else %}
-              <tr><td colspan="7" class="empty-state">No saved database connections.</td></tr>
+              <tr><td colspan="6" class="empty-state">No saved database connections.</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
     </section>
   </main>
+  <script src="/static/shared/js/database-management.js?v=1" defer></script>
 </body>
 </html>

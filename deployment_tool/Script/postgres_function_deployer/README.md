@@ -102,6 +102,8 @@ The DBA must manually execute `database_security.sql` in PostgreSQL/DB Solo befo
 .\.venv\Scripts\python.exe init_security.py
 ```
 
+For an existing application database, manually apply each new SQL migration under `database/migrations/` before using its feature. The module endpoint catalog requires `database/migrations/20261101_module_endpoint_catalog.sql`; new installations receive the same catalog from `database_security.sql`. Migrations are never run automatically by Flask.
+
 ### Module registry
 
 `database_security.sql` is also the canonical setup for the module registry and its role grants. Execute the updated script manually before using Configuration → Module Management. `DB_COMPARE` is seeded as the first internal module; deployment, history, and backup remain features inside it. External modules may be web-only: a validated public HTTPS web URL is sufficient, and the platform does not request JSON from the web page. API base, manifest, and health URLs are optional. A configured manifest URL must return JSON; an API base URL without a manifest URL is checked for JSON, and a configured health URL is checked against the module code and version. Web-only module identity is derived from its host, with version `1.0.0` until updated by an administrator. Admins choose its navigation group, register it disabled, review its metadata, and explicitly enable it.
@@ -115,6 +117,10 @@ Admins can create users and assign multiple modules from the existing `app_secur
 Forgot-password reset tokens are stored hashed and expire after 20 minutes. Configure the existing Brevo SMTP variables to deliver reset links. For local development with `FLASK_DEBUG=true`, a reset link is written only to the server log when delivery cannot be used. Password reset responses do not disclose whether an account exists.
 
 The admin menu at `/admin/menus` stores internal routes and external links in PostgreSQL. New menu records appear in the sidebar after the next request; internal routes must point to an existing Flask endpoint. Users without the corresponding database permission receive `403`, including on direct URL and API access.
+
+### Active connection tools
+
+Database Management lets an Admin save host/database connections with encrypted passwords. Select a saved connection in the shared sidebar to scope the database health and SQL tools to that connection for the signed-in session. Health checks read PostgreSQL statistics; the SQL runner permits only one read-only `SELECT`/`WITH` statement, applies a five-second timeout, and caps returned rows, columns, and response size. `VACUUM ANALYZE` is available only for one explicitly named table, has a separate confirmation step, and uses a 30-second timeout. The SQL runner does not accept other write or utility commands. Configure saved connections with least-privilege database accounts; read-only transactions do not replace database-level permissions.
 
 ### Optional local AI assistant
 
